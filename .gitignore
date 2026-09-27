@@ -2,6 +2,16 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .env
+.env.*
+!.env.example
 .DS_Store
+.idea/
+node_modules/
+dist/
+*.tsbuildinfo
 data/lakehouse/
