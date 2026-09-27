@@ -1,0 +1,14 @@
+[
+  {
+    "user_id": "emp-1",
+    "name": "Juan Perez",
+    "department": "Engineering",
+    "vacation_balance": 8
+  },
+  {
+    "user_id": "emp-2",
+    "name": "Ana Gomez",
+    "department": "People",
+    "vacation_balance": 12
+  }
+]

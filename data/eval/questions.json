@@ -1,0 +1,17 @@
+[
+  {
+    "question": "How many vacation days do employees receive?",
+    "expected_document": "Vacation Policy",
+    "expected_phrases": ["15 paid vacation days"]
+  },
+  {
+    "question": "Do employees need multi-factor authentication?",
+    "expected_document": "Security Policy",
+    "expected_phrases": ["multi-factor authentication"]
+  },
+  {
+    "question": "What are customer support hours?",
+    "expected_document": "Customer Support Hours",
+    "expected_phrases": ["8:00"]
+  }
+]
