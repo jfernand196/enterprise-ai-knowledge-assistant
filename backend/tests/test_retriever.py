@@ -1,11 +1,10 @@
-from pathlib import Path
-
+from app.core.config import PROJECT_ROOT
 from app.knowledge.index import build_knowledge_index
 from app.rag.generator import NO_CONTEXT_ANSWER
 
 
 def test_retriever_ranks_vacation_policy_first() -> None:
-    documents_dir = Path(__file__).resolve().parents[1] / "data" / "documents"
+    documents_dir = PROJECT_ROOT / "data" / "documents"
     index = build_knowledge_index(
         documents_dir=documents_dir,
         chunk_size=500,
@@ -21,7 +20,7 @@ def test_retriever_ranks_vacation_policy_first() -> None:
 
 
 def test_generator_refuses_empty_context() -> None:
-    documents_dir = Path(__file__).resolve().parents[1] / "data" / "documents"
+    documents_dir = PROJECT_ROOT / "data" / "documents"
     index = build_knowledge_index(
         documents_dir=documents_dir,
         chunk_size=500,
