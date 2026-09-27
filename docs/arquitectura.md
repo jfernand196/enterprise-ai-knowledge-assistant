@@ -148,3 +148,587 @@ La guía de la pantalla vacía separa políticas (se envían al pulsar) de pregu
 Cada respuesta muestra tokens de entrada, tokens de salida y latencia. Las fuentes se deduplican por documento: las que la respuesta nombra van primero y el resto queda plegado en “También consultados”.
 
 `fetch` corta a los 90 segundos. Sin ese límite, un reload de uvicorn a mitad de la llamada deja el botón en “Buscando…” para siempre. Con `gemini-3.5-flash` una respuesta tarda entre 20 y 40 segundos, así que el límite deja margen.
+
+                         USER
+                           │
+                           ▼
+                    React Frontend
+                           │
+                       POST /chat
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │   FastAPI   │
+                    └──────┬──────┘
+                           │
+                      ChatService
+                           │
+                    Input Guardrail
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │    ORCHESTRATOR   │
+                 │                   │
+                 │ native             │
+                 │ langchain          │
+                 │ langgraph          │
+                 └─────────┬─────────┘
+                           │
+                ┌──────────┴──────────┐
+                │                     │
+                ▼                     ▼
+               RAG                  AGENT
+                │                     │
+                │                     ▼
+                │                  Tools
+                │                     │
+                │               ┌─────┼─────┐
+                │               │     │     │
+                │            Profile Balance HR
+                │                       Request
+                │
+                ▼
+        Databricks Gold
+        gold.documents
+                │
+                ▼
+          TF-IDF Index
+                │
+                ▼
+            Retriever
+                │
+                ▼
+             Reranker
+                │
+                ▼
+               LLM
+                │
+                └──────────┐
+                           ▼
+                    Output Guardrail
+                           │
+                           ▼
+                        Trace
+
+
+
+Databricks: ¿qué papel juega?
+
+Databricks es principalmente tu plataforma de datos.
+
+Tienes:
+
+Documents
+   ↓
+Bronze
+   ↓
+Silver
+   ↓
+Gold
+Bronze
+
+Los documentos llegan prácticamente tal cual:
+
+vacations.md
+security.md
+support.md
+product_vision.md
+Silver
+
+Los limpias/transformas.
+
+Por ejemplo:
+
+category = trim(category)
+content_length = ...
+Gold
+
+Es la capa que la aplicación consume.
+
+knowledge_assistant.gold.documents
+
+Entonces:
+
+Databricks prepara y sirve los documentos que alimentan el RAG.
+
+Importante:
+
+Databricks no es el RAG.
+
+4. ¿Qué ocurre después de Gold?
+
+Aquí entra tu RAG.
+
+gold.documents
+       ↓
+load_gold_documents()
+       ↓
+chunks
+       ↓
+TF-IDF
+       ↓
+vector index en RAM
+
+Tu corpus es pequeño, por eso puedes mantener el índice en memoria.
+
+Cuando llega:
+
+"How many vacation days can I carry over?"
+
+haces:
+
+Question
+   ↓
+TF-IDF vector
+   ↓
+Cosine similarity
+   ↓
+Top 10 candidates
+   ↓
+Lexical reranker
+   ↓
+Top 3 chunks
+
+Y esos 3 chunks se entregan al LLM.
+
+5. ¿Por qué existe el reranker?
+
+Porque el primer resultado de TF-IDF no necesariamente es el mejor.
+
+Ejemplo:
+
+Query:
+"How many vacation days can I carry over?"
+
+TF-IDF puede devolver:
+
+1. Product Overview
+2. Vacation Policy
+3. Security Policy
+
+Pero tú sabes que:
+
+Vacation Policy
+
+es el documento relevante.
+
+Entonces el reranker mira el solapamiento de términos y puede reorganizar:
+
+1. Vacation Policy
+2. Product Overview
+3. Security Policy
+6. ¿Y dónde entra el LLM?
+
+Después de recuperar contexto:
+
+Question
+   +
+Relevant chunks
+       ↓
+      LLM
+       ↓
+Answer
+
+El LLM recibe instrucciones como:
+
+Responde únicamente utilizando los extractos proporcionados.
+
+Esto intenta evitar que invente políticas.
+
+Por eso tu RAG es:
+
+Retrieval
+   +
+Grounded Generation
+7. ¿Y el Agent?
+
+Ahora viene la otra mitad.
+
+Pregunta:
+
+"How many vacation days do I have?"
+
+RAG puede decir:
+
+La política permite X días...
+
+pero no sabe cuánto tienes tú.
+
+Entonces:
+
+Question
+   ↓
+Agent
+   ↓
+get_employee_profile
+   ↓
+get_vacation_balance
+   ↓
+LLM
+   ↓
+Answer
+
+Por ejemplo:
+
+Juan Perez
+8 vacation days
+
+El documento de política y el dato personal se combinan.
+
+8. ¿Qué pasa si quiero crear una solicitud?
+
+Aquí tienes una diferencia muy importante:
+
+READ
+ ├── get_employee_profile
+ ├── get_vacation_balance
+ └── search_documents
+
+WRITE
+ └── create_hr_request
+
+Crear una solicitud es una acción, no una consulta.
+
+Por eso necesitas autorización:
+
+User
+ ↓
+Agent
+ ↓
+create_hr_request
+ ↓
+authorize_tool()
+ ↓
+¿Tiene permiso?
+ │
+ ├── NO → error
+ │
+ └── YES → execute
+
+En tu ejemplo:
+
+emp-2 → permitido
+emp-1 → rechazado
+
+Y hay otra protección:
+
+model says:
+user_id = emp-2
+
+Tu aplicación no confía en eso.
+
+_with_user utiliza el user_id autenticado.
+
+Eso es seguridad importante.
+
+9. ¿Qué es MCP aquí?
+
+MCP es la forma en que expones las herramientas de RR. HH.
+
+En lugar de:
+
+Agent
+  ↓
+import get_vacation_balance
+
+tienes:
+
+Agent
+  ↓
+MCP Client
+  ↓
+MCP Server
+  ↓
+tools/list
+tools/call
+  ↓
+HR tools
+
+Así el agente puede descubrir las herramientas mediante un protocolo.
+
+Tu servidor MCP actualmente está in-process, es decir, está dentro de la misma aplicación.
+
+En producción podría estar separado.
+
+10. Ahora viene lo más importante: Native vs LangChain vs LangGraph
+
+Esta es la parte nueva de tu repo.
+
+No tienes tres arquitecturas diferentes.
+
+Tienes:
+
+                  MISMO SISTEMA
+                       │
+              ChatService
+                       │
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+       Native       LangChain    LangGraph
+
+Los tres utilizan:
+
+mismos documentos
+mismo índice
+mismas tools
+mismo MCP
+mismas reglas de autorización
+mismos guardrails
+mismas trazas
+
+Lo que cambia principalmente es la forma de orquestar el LLM y el agente.
+
+11. Native
+
+Es tu implementación manual.
+
+Planner
+   ↓
+if tools?
+   │
+   ├── NO → RAG
+   │
+   └── YES → Agent
+
+Tú escribiste el código que:
+
+llama al modelo
+interpreta JSON
+ejecuta tools
+vuelve a llamar al modelo
+maneja fallback
+controla el loop
+
+Esto es excelente para aprender porque puedes ver qué hay debajo de los frameworks.
+
+12. LangChain
+
+Ahora dices:
+
+"Quiero hacer lo mismo usando las abstracciones de LangChain."
+
+Por ejemplo:
+
+ChatPromptTemplate
+       ↓
+Retriever
+       ↓
+Model
+
+Eso es LCEL:
+
+prompt | model
+
+Y para tools:
+
+model
+  ↓
+tool_calls
+  ↓
+ToolMessage
+  ↓
+model
+
+LangChain te proporciona abstracciones como:
+
+ChatGoogleGenerativeAI
+ChatGroq
+BaseRetriever
+StructuredTool
+bind_tools
+with_structured_output
+with_fallbacks
+
+Por eso tu repo puede demostrar:
+
+"I understand both the underlying implementation and the framework abstraction."
+
+Eso es valioso.
+
+13. LangGraph
+
+LangGraph cambia principalmente la forma de representar el workflow.
+
+En lugar de:
+
+for step in range(MAX_STEPS):
+    ...
+
+tienes:
+
+              State
+                │
+                ▼
+              route
+             /     \
+            /       \
+         retrieve   agent
+            │         │
+            ▼         ▼
+         generate    tools
+            │         │
+            │         └──→ agent
+            ▼
+           END
+
+Aquí aparecen tres conceptos fundamentales:
+
+State
+
+Información que viaja por el workflow:
+
+question
+user_id
+documents
+messages
+response
+tokens
+Node
+
+Una función que hace algo:
+
+route
+retrieve
+generate
+agent
+tools
+finish
+Edge
+
+Define qué nodo viene después.
+
+agent → tools
+tools → agent
+agent → finish
+
+Por eso LangGraph es especialmente útil cuando el flujo tiene ciclos, estado y decisiones.
+
+14. Entonces, ¿qué aprendiste con este repo?
+
+En realidad estás construyendo una pequeña plataforma de GenAI.
+
+                 ENTERPRISE GENAI APP
+                         │
+        ┌────────────────┼─────────────────┐
+        │                │                 │
+      Data              AI              Operations
+        │                │                 │
+   Databricks          RAG              LLMOps
+   Delta              Agents           Tracing
+   Bronze/Silver       Tools            Evaluation
+   Gold               MCP              Cost
+        │                │              Guardrails
+        └────────────────┼────────────────┘
+                         │
+                  FastAPI / React
+
+Y esto encaja bastante bien con la vacante.
+
+15. ¿Dónde entra LLMOps?
+
+Tu aplicación genera una traza:
+
+request_id
+user
+model
+prompt_version
+mode
+latency
+tokens
+cost
+documents
+tools
+
+Eso permite contestar:
+
+¿Cuánto tarda?
+
+¿Cuánto cuesta?
+
+¿Qué modelo respondió?
+
+¿Qué documentos utilizó?
+
+¿Qué tools llamó?
+
+¿Qué versión del prompt estaba activa?
+
+Y tienes:
+
+/evaluations
+/traces
+/metrics
+
+Eso es la base de LLMOps.
+
+16. Lo que yo quiero que tengas en la cabeza para la entrevista
+
+No memorices todos los archivos.
+
+Memoriza este recorrido:
+
+USER
+ │
+ ▼
+React
+ │
+ ▼
+FastAPI
+ │
+ ▼
+Guardrail
+ │
+ ▼
+ORCHESTRATOR
+ │
+ ├───────────────┐
+ ▼               ▼
+RAG             AGENT
+ │               │
+ ▼               ▼
+Databricks      MCP
+Gold            Tools
+ │               │
+ ▼               ▼
+Retriever       HR data/action
+ │
+ ▼
+LLM
+ │
+ ▼
+Guardrail
+ │
+ ▼
+Trace / LLMOps
+
+Y luego recuerda:
+
+Databricks = datos
+
+RAG = buscar conocimiento
+
+LLM = generar lenguaje
+
+Agent = decidir/usar herramientas
+
+Tools = acceder a sistemas o ejecutar acciones
+
+MCP = protocolo para exponer/descubrir tools
+
+LangChain = framework para construir componentes/apps LLM
+
+LangGraph = framework para orquestar workflows/agentes con estado
+
+LLMOps = operar, evaluar, monitorizar y gobernar la aplicación LLM
+
+FastAPI = API
+
+React = interfaz
+
+Y una frase que deberías poder decir de memoria
+
+"This project is an enterprise GenAI assistant that combines RAG for company knowledge with an agent for employee-specific data and actions. Databricks provides the curated data layer, MCP exposes the HR tools, and I implemented the orchestration three ways: a native implementation, LangChain, and LangGraph. This allows me to compare the abstractions while keeping the same data, tools, authorization, and evaluation pipeline."
+
+Si puedes explicar ese recorrido sin mirar el README, ya estás entendiendo realmente el proyecto y no simplemente siguiendo el código.
+
+Files, images, and data analysis are unavailable until usage resets at 7:58 PM. Continue chatting with text only, or
