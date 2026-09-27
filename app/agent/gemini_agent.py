@@ -50,6 +50,7 @@ class GeminiPlanner:
         self._cache: dict[str, list[ToolCall]] = {}
 
     def needs_tools(self, message: str) -> bool:
+        self._client.last_usage = None
         try:
             return bool(self._calls(message))
         except (json.JSONDecodeError, TypeError, ValueError):

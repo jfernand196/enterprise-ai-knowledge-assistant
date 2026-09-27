@@ -29,6 +29,8 @@ export interface ChatReply {
   mode: string
   model: string
   latency_ms: number
+  input_tokens: number
+  output_tokens: number
 }
 
 export interface Suggestion {

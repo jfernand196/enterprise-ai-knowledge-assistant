@@ -39,3 +39,21 @@ def test_gemini_falls_through_quota_to_the_next_flash_model() -> None:
     assert generator.model_id == "gemini-3.5-flash"
     assert calls == ["gemini-3.6-flash", "gemini-3.5-flash"]
     assert generator.last_usage == (20, 9)
+
+
+def test_gemini_reads_interactions_api_token_totals() -> None:
+    def poster(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
+        return 200, {
+            "output_text": "Up to 5 days may be carried over.",
+            "usage": {"total_input_tokens": 420, "total_output_tokens": 18},
+        }
+
+    generator = GeminiGroundedGenerator(
+        gemini_api_key="test-key",
+        model_id="gemini-3.6-flash",
+        poster=poster,
+    )
+
+    generator.generate("What is the vacation policy?", [_chunk()])
+
+    assert generator.last_usage == (420, 18)

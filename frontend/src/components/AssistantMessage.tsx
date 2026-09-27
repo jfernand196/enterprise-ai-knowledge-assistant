@@ -27,9 +27,11 @@ export function AssistantMessage({ reply }: AssistantMessageProps) {
         </ul>
       )}
       <CitationList citations={reply.citations} answer={reply.answer} />
-      <p className="mt-4 text-xs text-muted">
-        {formatLatency(reply.latency_ms)} · {reply.model}
-      </p>
+      <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t border-line pt-3" aria-label={copy.usageLabel}>
+        <UsageStat label={copy.tokensUp} value={`${reply.input_tokens} ${copy.tokenUnit}`} />
+        <UsageStat label={copy.tokensDown} value={`${reply.output_tokens} ${copy.tokenUnit}`} />
+        <UsageStat label={copy.latency} value={formatLatency(reply.latency_ms)} />
+      </dl>
     </article>
   )
 }
@@ -42,9 +44,13 @@ function presentAnswer(answer: string): string {
     .trim()
 }
 
-function isDocumentTitleLine(line: string): boolean {
-  const plain = line.trim().replace(/[*_#>`]/g, "")
-  return /^document title\b/i.test(plain)
+function UsageStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold tracking-wide text-muted uppercase">{label}</dt>
+      <dd className="mt-0.5 text-sm font-medium text-ink">{value}</dd>
+    </div>
+  )
 }
 
 function formatLatency(latencyMs: number): string {
@@ -56,3 +62,9 @@ function formatLatency(latencyMs: number): string {
   const seconds = totalSeconds % 60
   return `${minutes} min ${seconds} s`
 }
+
+function isDocumentTitleLine(line: string): boolean {
+  const plain = line.trim().replace(/[*_#>`]/g, "")
+  return /^document title\b/i.test(plain)
+}
+

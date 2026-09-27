@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     databricks_profile: str = "dbc-a6df516d-a455"
     databricks_warehouse_id: str = "5cd458306322a115"
     databricks_catalog: str = "knowledge_assistant"
-    chunk_size: int = 500
+    chunk_size: int = 1000
     chunk_overlap: int = 100
     top_k: int = 3
     candidate_k: int = 10

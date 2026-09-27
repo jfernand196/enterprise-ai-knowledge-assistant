@@ -19,7 +19,9 @@ FLASH_LADDER = (
 )
 SYSTEM_PROMPT = (
     "You answer questions about company policy using only the excerpts provided. "
-    "Name the document title you used. "
+    "Name the document title in the first sentence. "
+    "Copy every number, deadline, and exception that answers the question, including rollover and payout. "
+    "Do not replace a number with a vague phrase. "
     "If the excerpts do not contain the answer, say you do not have enough information "
     "in the company knowledge base. Do not invent policy."
 )
@@ -63,18 +65,17 @@ class GeminiGroundedGenerator:
         return self._extractive.generate(question, chunks)
 
     def complete(self, system: str, user: str) -> str:
-        self.last_usage = None
         for model_id in self._models:
             text, usage = self._try_gemini(model_id, system, user)
             if text:
                 self.model_id = model_id
-                self.last_usage = usage
+                self.last_usage = _add_usage(self.last_usage, usage)
                 return text
         if self._groq_api_key:
             text, usage = self._try_groq(system, user)
             if text:
                 self.model_id = self._groq_model_id
-                self.last_usage = usage
+                self.last_usage = _add_usage(self.last_usage, usage)
                 return text
         return ""
 
@@ -168,15 +169,34 @@ def _gemini_text(body: dict[str, Any]) -> str:
 
 def _usage(body: dict[str, Any]) -> tuple[int, int] | None:
     raw = body.get("usageMetadata") or body.get("usage") or {}
-    if not raw:
+    if not isinstance(raw, dict) or not raw:
         return None
-    prompt = raw.get("promptTokenCount") or raw.get("prompt_tokens") or raw.get("input_tokens")
+    prompt = (
+        raw.get("promptTokenCount")
+        or raw.get("prompt_tokens")
+        or raw.get("input_tokens")
+        or raw.get("total_input_tokens")
+    )
     completion = (
-        raw.get("candidatesTokenCount") or raw.get("completion_tokens") or raw.get("output_tokens")
+        raw.get("candidatesTokenCount")
+        or raw.get("completion_tokens")
+        or raw.get("output_tokens")
+        or raw.get("total_output_tokens")
     )
     if prompt is None and completion is None:
         return None
     return int(prompt or 0), int(completion or 0)
+
+
+def _add_usage(
+    current: tuple[int, int] | None,
+    added: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    if added is None:
+        return current
+    if current is None:
+        return added
+    return current[0] + added[0], current[1] + added[1]
 
 
 def _post(url: str, headers: dict[str, str], payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:

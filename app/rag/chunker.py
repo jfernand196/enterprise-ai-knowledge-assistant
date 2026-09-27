@@ -20,6 +20,7 @@ def split_into_chunks(
     index = 0
     while start < len(text):
         end = min(start + chunk_size, len(text))
+        end = _end_at_sentence(text, start, end)
         piece = text[start:end].strip()
         if piece:
             chunks.append(
@@ -34,5 +35,16 @@ def split_into_chunks(
             index += 1
         if end == len(text):
             break
-        start = end - overlap
+        next_start = end - overlap
+        start = next_start if next_start > start else end
     return chunks
+
+
+def _end_at_sentence(text: str, start: int, end: int) -> int:
+    if end >= len(text):
+        return len(text)
+    window = text[start:end]
+    boundary = max(window.rfind(". "), window.rfind(".\n"))
+    if boundary < (end - start) // 2:
+        return end
+    return start + boundary + 1

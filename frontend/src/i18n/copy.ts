@@ -15,6 +15,9 @@ export interface Copy {
   title: string
   languageToggle: string
   languageToggleLabel: string
+  guideButton: string
+  guideButtonLabel: string
+  close: string
   guideKicker: string
   guideTitle: string
   guideLead: string
@@ -33,6 +36,12 @@ export interface Copy {
   reviewing: string
   reviewingHint: string
   sources: string
+  alsoChecked: string
+  tokensUp: string
+  tokensDown: string
+  latency: string
+  tokenUnit: string
+  usageLabel: string
   toolsUsed: string
   categories: Record<string, string>
   tools: Record<string, string>
@@ -73,6 +82,9 @@ export const copy: Record<Locale, Copy> = {
     title: "Asistente",
     languageToggle: "English",
     languageToggleLabel: "Pasar la interfaz al inglés",
+    guideButton: "Guía",
+    guideButtonLabel: "Ver qué preguntar",
+    close: "Cerrar",
     guideKicker: "Guía",
     guideTitle: "Cómo probar el asistente",
     guideLead: "Las preguntas van en inglés, porque los documentos están en inglés. Pulsa una política para enviarla. En las preguntas de un empleado, elige el nombre y después pulsa Preguntar.",
@@ -91,6 +103,12 @@ export const copy: Record<Locale, Copy> = {
     reviewing: "Revisando los documentos",
     reviewingHint: "La primera respuesta puede tardar cerca de un minuto.",
     sources: "Fuentes",
+    alsoChecked: "También se consultaron",
+    tokensUp: "Subida",
+    tokensDown: "Bajada",
+    latency: "Latencia",
+    tokenUnit: "tokens",
+    usageLabel: "Consumo",
     toolsUsed: "Herramientas usadas",
     categories: {
       hr: "Recursos humanos",
@@ -123,6 +141,9 @@ export const copy: Record<Locale, Copy> = {
     title: "Assistant",
     languageToggle: "Español",
     languageToggleLabel: "Switch the interface to Spanish",
+    guideButton: "Guide",
+    guideButtonLabel: "See what to ask",
+    close: "Close",
     guideKicker: "Guide",
     guideTitle: "How to try the assistant",
     guideLead: "Ask in English, because the documents are in English. Click a policy to send it. For an employee question, choose the name, then press Ask.",
@@ -141,6 +162,12 @@ export const copy: Record<Locale, Copy> = {
     reviewing: "Checking the documents",
     reviewingHint: "The first answer can take about a minute.",
     sources: "Sources",
+    alsoChecked: "Also checked",
+    tokensUp: "Input",
+    tokensDown: "Output",
+    latency: "Latency",
+    tokenUnit: "tokens",
+    usageLabel: "Usage",
     toolsUsed: "Tools used",
     categories: {
       hr: "Human resources",

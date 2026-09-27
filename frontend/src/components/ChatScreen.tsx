@@ -5,6 +5,7 @@ import { sendChat } from "@/api/chat"
 import { AssistantMessage } from "@/components/AssistantMessage"
 import { Composer } from "@/components/Composer"
 import { EmptyState } from "@/components/EmptyState"
+import { GuideDialog } from "@/components/GuideDialog"
 import type { ChatReply, EmployeeId } from "@/domain/chat"
 import { useLocale } from "@/i18n/LocaleProvider"
 
@@ -23,12 +24,25 @@ export function ChatScreen() {
   const { copy, toggleLocale } = useLocale()
   const [items, setItems] = useState<ThreadItem[]>([])
   const [draft, setDraft] = useState<ComposerDraft | null>(null)
+  const [guideOpen, setGuideOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
   const mutation = useMutation({ mutationFn: sendChat })
+  const showingGuide = items.length === 0 && !mutation.isPending
 
   useEffect(() => {
+    if (showingGuide) {
+      return
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-  }, [items, mutation.isPending])
+  }, [items, mutation.isPending, showingGuide])
+
+  useEffect(() => {
+    if (!draft) {
+      return
+    }
+    composerRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+  }, [draft])
 
   function ask(message: string, userId?: EmployeeId) {
     setItems((current) => [...current, { id: crypto.randomUUID(), kind: "user", text: message }])
@@ -53,25 +67,51 @@ export function ChatScreen() {
   }
 
   return (
-    <div className="flex h-dvh flex-col">
-      <header className="shrink-0 border-b border-line px-5 py-4">
+    <div className={showingGuide ? "flex min-h-dvh flex-col" : "flex h-dvh flex-col"}>
+      <header className="sticky top-0 z-10 shrink-0 border-b border-line bg-paper px-5 py-4">
         <div className="mx-auto flex w-full max-w-3xl items-baseline justify-between gap-4">
           <div>
             <p className="text-xs font-semibold tracking-wide text-accent uppercase">{copy.brand}</p>
             <h1 className="font-serif text-2xl text-ink">{copy.title}</h1>
           </div>
-          <button
-            type="button"
-            onClick={toggleLocale}
-            className="rounded-full border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-ink hover:border-accent"
-            aria-label={copy.languageToggleLabel}
-          >
-            {copy.languageToggle}
-          </button>
+          <div className="flex items-center gap-2">
+            {!showingGuide && (
+              <button
+                type="button"
+                onClick={() => setGuideOpen(true)}
+                className="flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-ink hover:border-accent"
+                aria-label={copy.guideButtonLabel}
+                aria-haspopup="dialog"
+              >
+                <span
+                  className="flex size-4 items-center justify-center rounded-full border border-current text-[0.625rem] leading-none"
+                  aria-hidden="true"
+                >
+                  i
+                </span>
+                {copy.guideButton}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={toggleLocale}
+              className="rounded-full border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-ink hover:border-accent"
+              aria-label={copy.languageToggleLabel}
+            >
+              {copy.languageToggle}
+            </button>
+          </div>
         </div>
       </header>
-      <main className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-5">
-        <div className="min-h-0 flex-1 overflow-y-auto">
+      <GuideDialog
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        onAsk={(message) => ask(message)}
+        onStage={stage}
+        disabled={mutation.isPending}
+      />
+      <main className={showingGuide ? "mx-auto flex w-full max-w-3xl flex-1 flex-col px-5" : "mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-5"}>
+        <div className={showingGuide ? undefined : "min-h-0 flex-1 overflow-y-auto"}>
           {items.length === 0 ? (
             <EmptyState onAsk={(message) => ask(message)} onStage={stage} disabled={mutation.isPending} />
           ) : (
@@ -112,7 +152,9 @@ export function ChatScreen() {
           )}
           <div ref={bottomRef} />
         </div>
-        <Composer key={copy.documentTitle} pending={mutation.isPending} draft={draft} onSend={ask} />
+        <div ref={composerRef}>
+          <Composer key={copy.documentTitle} pending={mutation.isPending} draft={draft} onSend={ask} />
+        </div>
       </main>
     </div>
   )

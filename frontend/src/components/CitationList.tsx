@@ -12,26 +12,41 @@ export function CitationList({ citations, answer }: CitationListProps) {
   if (sources.length === 0) {
     return null
   }
+  const answerText = answer.toLowerCase()
+  const cited = sources.filter((source) => answerText.includes(source.title.toLowerCase()))
+  const primary = cited.length > 0 ? cited : sources.slice(0, 1)
+  const extra = sources.filter((source) => !primary.includes(source))
 
   return (
     <section className="mt-5 border-t border-line pt-4" aria-label={copy.sources}>
       <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{copy.sources}</h3>
-      <ul className="mt-2">
-        {sources.map((citation) => (
-          <li key={citation.doc_id} className="py-2.5">
-            <div className="flex items-baseline justify-between gap-4">
-              <p className="text-sm font-semibold text-ink">{citation.title}</p>
-              <p className="shrink-0 text-xs text-muted">
-                {copy.categories[citation.category] ?? citation.category}
-              </p>
-            </div>
-            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-ink-soft">
-              {readableExcerpt(citation.excerpt)}
-            </p>
-          </li>
-        ))}
-      </ul>
+      <SourceList sources={primary} categoryLabel={copy.categories} />
+      {extra.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-sm text-muted">{copy.alsoChecked}</summary>
+          <SourceList sources={extra} categoryLabel={copy.categories} />
+        </details>
+      )}
     </section>
+  )
+}
+
+function SourceList({
+  sources,
+  categoryLabel,
+}: {
+  sources: Citation[]
+  categoryLabel: Record<string, string>
+}) {
+  return (
+    <ul className="mt-2">
+      {sources.map((citation) => (
+        <li key={citation.doc_id} className="flex items-baseline justify-between gap-4 py-2">
+          <p className="text-sm font-semibold text-ink">{citation.title}</p>
+          <p className="shrink-0 text-xs text-muted">{categoryLabel[citation.category] ?? citation.category}</p>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -54,17 +69,3 @@ function orderSources(citations: Citation[], answer: string): Citation[] {
   })
 }
 
-function readableExcerpt(excerpt: string): string {
-  const clean = excerpt.replace(/\s+/g, " ").trim()
-  const cut = clean.match(/^(.*?)(?:\.{3}|…)$/)
-  if (!cut) {
-    return clean
-  }
-  let body = cut[1].trimEnd()
-  const lastSpace = body.lastIndexOf(" ")
-  const lastToken = lastSpace === -1 ? body : body.slice(lastSpace + 1)
-  if (lastToken.length > 0 && lastToken.length < 8 && !/[.!?]$/.test(lastToken)) {
-    body = lastSpace === -1 ? "" : body.slice(0, lastSpace)
-  }
-  return body ? `${body}…` : clean
-}
