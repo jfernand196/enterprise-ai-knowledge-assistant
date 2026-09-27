@@ -32,9 +32,3 @@ export interface ChatReply {
   input_tokens: number
   output_tokens: number
 }
-
-export interface Suggestion {
-  label: string
-  message: string
-  userId?: EmployeeId
-}
