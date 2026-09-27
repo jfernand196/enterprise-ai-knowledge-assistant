@@ -1,5 +1,6 @@
 import asyncio
 from time import perf_counter
+from typing import Protocol
 from uuid import uuid4
 
 from app.llmops.guardrails import GuardrailRejectedError, check_input, check_output
@@ -8,6 +9,10 @@ from app.llmops.usage import estimate_cost_usd, estimate_tokens
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.agent_service import AgentService
 from app.services.rag_service import RagService
+
+
+class OrchestratorPort(Protocol):
+    async def answer(self, payload: ChatRequest, request_id: str) -> ChatResponse: ...
 
 
 class ChatService:
@@ -20,6 +25,7 @@ class ChatService:
         prompt_version: str,
         input_rate: float,
         output_rate: float,
+        orchestrator: OrchestratorPort | None = None,
     ) -> None:
         self._rag_service = rag_service
         self._agent_service = agent_service
@@ -28,22 +34,27 @@ class ChatService:
         self._prompt_version = prompt_version
         self._input_rate = input_rate
         self._output_rate = output_rate
+        self._orchestrator = orchestrator
 
     async def create_reply(self, payload: ChatRequest) -> ChatResponse:
         request_id = str(uuid4())
         started = perf_counter()
         try:
             check_input(payload.message)
-            needs_tools = await asyncio.to_thread(self._agent_service.needs_tools, payload.message)
-            if needs_tools:
-                response = await self._agent_service.answer(payload, request_id)
-            else:
-                response = await self._rag_service.answer(payload, request_id)
+            response = await self._route(payload, request_id)
             response.answer = check_output(response.answer)
             return self._finalize(payload, response, started, blocked=False)
         except GuardrailRejectedError as exc:
             self.record_blocked(payload, request_id, exc.reason, started)
             raise
+
+    async def _route(self, payload: ChatRequest, request_id: str) -> ChatResponse:
+        if self._orchestrator is not None:
+            return await self._orchestrator.answer(payload, request_id)
+        needs_tools = await asyncio.to_thread(self._agent_service.needs_tools, payload.message)
+        if needs_tools:
+            return await self._agent_service.answer(payload, request_id)
+        return await self._rag_service.answer(payload, request_id)
 
     def record_blocked(self, payload: ChatRequest, request_id: str, reason: str, started: float) -> None:
         input_tokens = estimate_tokens(payload.message)

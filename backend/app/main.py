@@ -83,22 +83,52 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if isinstance(generator, GeminiGroundedGenerator):
         planner = GeminiPlanner(generator)
         answer_writer = GeminiAnswerWriter(generator)
+    writers = frozenset(settings.hr_writers.split(","))
     agent_service = AgentService(
         registry,
         planner=planner,
-        writers=frozenset(settings.hr_writers.split(",")),
+        writers=writers,
         answer_writer=answer_writer,
     )
+    prompt_version = settings.prompt_version
+    orchestrator = None
+    if settings.orchestrator == "langgraph":
+        from app.lg.service import build_langgraph_service
+
+        orchestrator = build_langgraph_service(
+            index.retriever,
+            registry,
+            writers,
+            gemini_api_key=settings.gemini_api_key,
+            model_id=settings.model_id,
+            groq_api_key=settings.groq_api_key,
+            groq_model_id=settings.groq_model_id,
+        )
+        prompt_version = f"langgraph-{settings.prompt_version}"
+    elif settings.orchestrator == "langchain":
+        from app.lc.services import build_langchain_services
+
+        rag_service, agent_service = build_langchain_services(
+            index.retriever,
+            registry,
+            writers,
+            gemini_api_key=settings.gemini_api_key,
+            model_id=settings.model_id,
+            groq_api_key=settings.groq_api_key,
+            groq_model_id=settings.groq_model_id,
+        )
+        prompt_version = f"langchain-{settings.prompt_version}"
     app.state.chat_service = ChatService(
         rag_service,
         agent_service,
         traces,
         model=settings.model_name,
-        prompt_version=settings.prompt_version,
+        prompt_version=prompt_version,
         input_rate=settings.input_token_rate,
         output_rate=settings.output_token_rate,
+        orchestrator=orchestrator,
     )
-    app.state.evaluation_service = EvaluationService(rag_service, settings.eval_path)
+    app.state.evaluation_service = EvaluationService(orchestrator or rag_service, settings.eval_path)
     app.state.mcp_catalog_service = McpCatalogService(mcp_client)
     app.state.lakehouse_service = build_lakehouse_service(
         backend=settings.lakehouse_backend,

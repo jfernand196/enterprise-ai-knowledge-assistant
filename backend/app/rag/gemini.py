@@ -41,7 +41,7 @@ class GeminiGroundedGenerator:
         gemini_api_key: str,
         model_id: str,
         groq_api_key: str = "",
-        groq_model_id: str = "llama-3.3-70b-versatile",
+        groq_model_id: str = "openai/gpt-oss-120b",
         poster: Poster | None = None,
     ) -> None:
         self._gemini_api_key = gemini_api_key.strip()

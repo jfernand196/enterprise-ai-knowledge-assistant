@@ -23,7 +23,7 @@ React  →  POST /chat
             →  traza (latencia, tokens, coste, docs, tools)
 ```
 
-`ChatService` es el orquestador. El planner corre en un hilo (`asyncio.to_thread`) porque la llamada al modelo es síncrona. Si el planner dice que no hay tools, entra `RagService`. Si dice que sí, entra `AgentService`.
+`ChatService` es el orquestador. El planner corre en un hilo (`asyncio.to_thread`) porque la llamada al modelo es síncrona. Si el planner dice que no hay tools, entra `RagService`. Si dice que sí, entra `AgentService`. Con `ORCHESTRATOR=langgraph` el paso de ruta lo hace el grafo (ver [Orquestadores intercambiables](#orquestadores-intercambiables)); los guardrails, las métricas y la traza siguen en `ChatService`.
 
 Los tests fuerzan `LAKEHOUSE_BACKEND=local` y `LLM_PROVIDER=extractive` antes de importar la app. La suite no depende de Databricks ni de una API de pago.
 
@@ -33,7 +33,9 @@ El corpus de demostración son cuatro markdown: vacaciones, seguridad, soporte y
 
 ### Por qué TF-IDF y no un embedding de API
 
-`TfidfEmbeddingClient` implementa `EmbeddingPort`. Ajusta el vocabulario sobre los chunks y representa cada texto como un vector disperso de TF-IDF. El retriever compara por coseno, se queda con `candidate_k` (10) y `LexicalReranker` reordena por solapamiento de términos de la pregunta. Al generador le llegan `top_k` (3) chunks de 500 caracteres con 100 de solape.
+`TfidfEmbeddingClient` implementa `EmbeddingPort`. Ajusta el vocabulario sobre los chunks y representa cada texto como un vector disperso de TF-IDF. El retriever compara por coseno, se queda con `candidate_k` (10) y `LexicalReranker` reordena por solapamiento de términos de la pregunta. Al generador le llegan `top_k` (3) chunks de hasta 1000 caracteres con 100 de solape.
+
+El chunker corta en el último fin de frase (`. `) pasada la mitad del chunk. Con cortes fijos, una frase como “se pueden trasladar hasta 5 días” quedaba partida y el modelo contestaba “una cantidad especificada”. El número tiene que llegar en la misma frase que la regla.
 
 Está así por tres razones:
 
@@ -52,9 +54,9 @@ El rerank existe porque el coseno de TF-IDF abre la red y a veces mete un docume
 | `LLM_PROVIDER` distinto de `gemini`, o sin clave | `GroundedGenerator` | Extrae frases de los chunks. Es el camino de los tests y el último recurso. |
 | Gemini con clave | `GeminiGroundedGenerator` | Redacta la respuesta solo con los extractos. |
 
-La cadena de Gemini es `gemini-3.6-flash` → `gemini-3.5-flash` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite`. Si un modelo responde 429 u otro fallo, se prueba el siguiente. Los modelos Gemini 3 que no son lite llevan `thinking_level=minimal`: la pregunta es de extracción, no de razonamiento largo, y el pensamiento extra solo añade latencia. Si toda la cadena falla y hay `GROQ_API_KEY`, entra Groq con `llama-3.3-70b-versatile`. Si Groq también falla, vuelve el generador extractivo.
+La cadena de Gemini es `gemini-3.6-flash` → `gemini-3.5-flash` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite`. Si un modelo responde 429 u otro fallo, se prueba el siguiente. Los modelos Gemini 3 que no son lite llevan `thinking_level=minimal`: la pregunta es de extracción, no de razonamiento largo, y el pensamiento extra solo añade latencia. Si toda la cadena falla y hay `GROQ_API_KEY`, entra Groq con `openai/gpt-oss-120b` (Groq retiró `llama-3.3-70b-versatile`). Si Groq también falla, vuelve el generador extractivo.
 
-El prompt del sistema obliga a contestar solo con los extractos, a nombrar el documento y a decir que no hay información cuando el fragmento no alcanza. Así se reduce la invención de política. La interfaz quita la línea suelta `Document Title:` porque la cita ya muestra el título.
+El prompt del sistema obliga a contestar solo con los extractos, a nombrar el documento en la primera frase, a copiar cada número, plazo y excepción (traslado y pago incluidos) y a decir que no hay información cuando el fragmento no alcanza. Así se reduce la invención de política. La interfaz quita la línea suelta `Document Title:` porque la cita ya muestra el título.
 
 ## Tools del agente
 
@@ -76,6 +78,26 @@ Las tools con `user_id` no aceptan el empleado que elija el modelo. `_with_user`
 `authorize_tool` corre antes de `execute`. `create_hr_request` solo está permitida si el usuario está en `hr_writers` (por defecto `emp-2`, Ana Gomez). Juan Perez recibe un error y `GeminiAnswerWriter` tiene que incluir ese error. Si el modelo lo omite, el writer lo antepone. No se puede responder “solicitud creada” cuando la tool falló.
 
 El resto de tools son lectura. No pasan por esa lista.
+
+## Orquestadores intercambiables
+
+`ORCHESTRATOR` en `.env` elige quién ejecuta el flujo. Los tres usan el mismo índice, las mismas tools MCP, la misma `authorize_tool` y la misma traza. Cambiar de uno a otro no cambia qué empleado puede escribir.
+
+| Valor | Código | Cómo decide y ejecuta |
+| --- | --- | --- |
+| `native` (defecto) | `app/rag`, `app/agent` | Planner JSON propio, cliente de la Interactions API de Gemini, loop escrito a mano |
+| `langchain` | `app/lc` | Cadena LCEL para RAG, router con `with_structured_output`, `bind_tools` y loop manual con `ToolMessage` |
+| `langgraph` | `app/lg` | Un `StateGraph`: nodos route, retrieve, generate, agent, tools, finish; `ToolNode` y `tools_condition` para el ciclo del agente |
+
+Por qué existen los tres: el nativo muestra qué hace cada pieza sin abstracciones; los otros dos muestran lo mismo con las librerías que se usan en producción, para comparar qué ahorran y qué esconden.
+
+Detalles que importan:
+
+- Los modelos de LangChain y LangGraph son `ChatGoogleGenerativeAI` por cada modelo de la cadena y `ChatGroq` al final, unidos con `with_fallbacks`. Con tools, cada modelo recibe `bind_tools` antes de encadenarse.
+- En LangGraph el `user_id` llega a las tools por `InjectedState`. No aparece en el schema que ve el modelo, así que no lo puede elegir. En LangChain se cierra sobre el `user_id` al construir las tools en cada petición.
+- El grafo se compila una vez al arrancar. `recursion_limit=12` cumple el papel de `MAX_STEPS`.
+- `prompt_version` en la traza queda como `langchain-v1` o `langgraph-v1` para comparar ejecuciones.
+- Las guías de estudio están en [langchain.md](langchain.md) y [langgraph.md](langgraph.md).
 
 ## MCP
 
@@ -111,7 +133,7 @@ Los identificadores SQL pasan por `quote_identifier` con una allowlist `[A-Za-z_
 
 `check_input` rechaza frases de inyección (`ignore previous instructions`, `reveal the system prompt`, `you are now`) con HTTP 400. `check_output` sustituye la respuesta si el modelo intenta volcar el system prompt.
 
-Cada `/chat` escribe una traza: `request_id`, usuario, modelo, versión de prompt, modo (`rag`, `agent` o `blocked`), latencia, tokens, coste, documentos recuperados y tools. La metadata de uso de Gemini a menudo viene vacía, así que si ambos contadores siguen en cero se estiman con caracteres / 4. El coste usa tarifas de referencia (`input_token_rate`, `output_token_rate`) para que `/metrics` tenga forma aunque el proveedor no devuelva el usage. `GET /traces` y `GET /traces/{request_id}` exponen eso.
+Cada `/chat` escribe una traza: `request_id`, usuario, modelo, versión de prompt, modo (`rag`, `agent` o `blocked`), latencia, tokens, coste, documentos recuperados y tools. Los tokens salen del proveedor: `total_input_tokens` y `total_output_tokens` en la Interactions API, `usage_metadata` en LangChain. En el agente se suman planner y writer (o cada vuelta del grafo). Solo si ambos contadores siguen en cero se estiman con caracteres / 4. El coste usa tarifas de referencia (`input_token_rate`, `output_token_rate`) para que `/metrics` tenga forma aunque el proveedor no devuelva el usage. `GET /traces` y `GET /traces/{request_id}` exponen eso.
 
 `POST /evaluations` corre el conjunto de `data/eval/questions.json` contra el mismo RAG. Sirve para ver si un cambio de chunk o de prompt empeora las respuestas de política, no para atender al usuario.
 
@@ -121,6 +143,8 @@ Vite, React, TypeScript y Tailwind. TanStack Query guarda el estado de la petici
 
 La cromática de la interfaz está en español o en inglés (`localStorage`, clave `ka-locale`). Las preguntas de ejemplo siguen en inglés en los dos idiomas: el índice está en inglés y una pregunta en español recupera peor. El botón del encabezado cambia solo la interfaz.
 
-La guía de la pantalla vacía separa políticas (se envían al pulsar) de preguntas de empleado (rellenan el selector y el texto, y la persona pulsa Preguntar). Eso evita mandar “crea una solicitud” sin haber elegido a Ana Gomez o a Juan Perez.
+La guía de la pantalla vacía separa políticas (se envían al pulsar) de preguntas de empleado (rellenan el selector y el texto, y la persona pulsa Preguntar). Eso evita mandar “crea una solicitud” sin haber elegido a Ana Gomez o a Juan Perez. Con la conversación ya empezada, el botón **ⓘ Guía** del encabezado abre la misma guía en un `<dialog>` nativo.
 
-`fetch` corta a los 90 segundos. Sin ese límite, un reload de uvicorn a mitad de la llamada deja el botón en “Buscando…” para siempre.
+Cada respuesta muestra tokens de entrada, tokens de salida y latencia. Las fuentes se deduplican por documento: las que la respuesta nombra van primero y el resto queda plegado en “También consultados”.
+
+`fetch` corta a los 90 segundos. Sin ese límite, un reload de uvicorn a mitad de la llamada deja el botón en “Buscando…” para siempre. Con `gemini-3.5-flash` una respuesta tarda entre 20 y 40 segundos, así que el límite deja margen.

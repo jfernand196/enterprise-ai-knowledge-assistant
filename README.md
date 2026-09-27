@@ -3,7 +3,7 @@
 Interview project for Lovelytics — AI Engineer. FastAPI, RAG, an HR agent with MCP tools, a Databricks medallion lakehouse, LLMOps, and a React chat UI.
 
 ```
-React → FastAPI → Guardrails → Orchestrator
+React → FastAPI → Guardrails → Orchestrator (native | langchain | langgraph)
                                   ├── RAG over the Databricks gold table
                                   └── Agent → MCP tools (profile, balance, HR request)
                                         ↓
@@ -13,6 +13,18 @@ React → FastAPI → Guardrails → Orchestrator
 Policy questions go to RAG. Questions about the speaker (vacation balance, time off requests) go to the agent. Only `emp-2` (Ana Gomez) may create HR requests.
 
 The design choices and the reason for each tool are in [docs/arquitectura.md](docs/arquitectura.md).
+
+## Orchestrators
+
+`ORCHESTRATOR` in `.env` picks who runs the flow. All three share the index, the MCP tools, authorization, and tracing.
+
+| Value | Code | Study guide |
+| --- | --- | --- |
+| `native` (default) | `backend/app/rag`, `backend/app/agent` | [docs/arquitectura.md](docs/arquitectura.md) |
+| `langchain` | `backend/app/lc` | [docs/langchain.md](docs/langchain.md) |
+| `langgraph` | `backend/app/lg` | [docs/langgraph.md](docs/langgraph.md) |
+
+Restart uvicorn after changing it. Traces record the choice as `prompt_version` (`v1`, `langchain-v1`, `langgraph-v1`).
 
 ## Layout
 
@@ -25,10 +37,12 @@ The design choices and the reason for each tool are in [docs/arquitectura.md](do
 | `backend/app/mcp` | In-process MCP server and client for the HR tools |
 | `backend/app/lakehouse` | Bronze, silver, gold pipeline (local JSON or Databricks Delta) |
 | `backend/app/llmops` | Guardrails, traces, token and cost estimates |
+| `backend/app/lc` | The same RAG and agent built with LangChain |
+| `backend/app/lg` | The whole flow as a LangGraph state graph |
 | `backend/tests` | Pytest suite that runs without Databricks or an API key |
 | `frontend` | Vite + React chat UI |
 | `data` | Policy documents, employees, evaluation questions |
-| `docs` | Architecture notes |
+| `docs` | Architecture notes and LangChain / LangGraph study guides |
 
 `.env` and `data/` stay at the repository root. The backend reads both from there.
 
@@ -60,7 +74,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The **Guía** button lists what to ask and the expected answer.
+Open http://localhost:5173. The **Guía** button lists what to ask and the expected answer. Each reply shows input tokens, output tokens, and latency. The header button switches the UI between Spanish and English.
 
 ## API
 
@@ -79,3 +93,5 @@ Open http://localhost:5173. The **Guía** button lists what to ask and the expec
 cd backend && .venv/bin/pytest
 cd frontend && npx tsc -b
 ```
+
+The LangChain and LangGraph tests use fake chat models, so they also run offline.

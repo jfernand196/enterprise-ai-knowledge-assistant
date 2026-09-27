@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     prompt_version: str = "v1"
     llm_provider: str = "extractive"
     model_id: str = "gemini-3.6-flash"
-    groq_model_id: str = "llama-3.3-70b-versatile"
+    groq_model_id: str = "openai/gpt-oss-120b"
+    orchestrator: str = "native"
     gemini_api_key: str = ""
     groq_api_key: str = ""
     input_token_rate: float = 0.15
