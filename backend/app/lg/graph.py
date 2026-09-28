@@ -10,11 +10,13 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.agent.gemini_agent import USER_SCOPED_TOOLS
 from app.agent.tools import ToolObservation
+from app.domain.models import Mode
 from app.lc.agent import keep_errors
 from app.lc.models import model_name, token_usage, with_fallbacks
 from app.lc.rag_chain import RAG_PROMPT, format_documents
 from app.lc.retriever import IndexRetriever
-from app.lc.services import MISSING_USER, RouterPort
+from app.agent.answers import MISSING_USER
+from app.lc.services import RouterPort
 from app.lg.state import GraphState
 from app.rag.generator import NO_CONTEXT_ANSWER
 from app.rag.retriever import Retriever
@@ -37,7 +39,7 @@ def build_graph(
 
     async def route(state: GraphState) -> dict:
         needs_tools = await asyncio.to_thread(router.needs_tools, state["question"])
-        return {"route": "agent" if needs_tools else "rag"}
+        return {"route": Mode.AGENT if needs_tools else Mode.RAG}
 
     async def retrieve(state: GraphState) -> dict:
         index = IndexRetriever(retriever=retriever, category=state.get("category"), top_k=state.get("top_k"))
@@ -101,7 +103,7 @@ def observations_from(messages: list, user_id: str | None) -> list[ToolObservati
 
 
 def _after_route(state: GraphState) -> str:
-    if state["route"] == "rag":
+    if state["route"] == Mode.RAG:
         return "retrieve"
     return "agent" if state.get("user_id") else "missing_user"
 

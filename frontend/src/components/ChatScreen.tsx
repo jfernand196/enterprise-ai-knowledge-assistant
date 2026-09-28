@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { useEffect, useRef, useState } from "react"
 
 import { sendChat } from "@/api/chat"
@@ -6,6 +7,9 @@ import { AssistantMessage } from "@/components/AssistantMessage"
 import { Composer } from "@/components/Composer"
 import { EmptyState } from "@/components/EmptyState"
 import { GuideDialog } from "@/components/GuideDialog"
+import { ErrorAlert } from "@/components/ui/ErrorAlert"
+import { PageHeader } from "@/components/ui/PageHeader"
+import { pillButton } from "@/components/ui/styles"
 import type { ChatReply, EmployeeId } from "@/domain/chat"
 import { useLocale } from "@/i18n/LocaleProvider"
 
@@ -21,7 +25,7 @@ type ThreadItem =
   | { id: string; kind: "error"; text: string }
 
 export function ChatScreen() {
-  const { copy, toggleLocale } = useLocale()
+  const { copy } = useLocale()
   const [items, setItems] = useState<ThreadItem[]>([])
   const [draft, setDraft] = useState<ComposerDraft | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
@@ -68,18 +72,17 @@ export function ChatScreen() {
 
   return (
     <div className={showingGuide ? "flex min-h-dvh flex-col" : "flex h-dvh flex-col"}>
-      <header className="sticky top-0 z-10 shrink-0 border-b border-line bg-paper px-5 py-4">
-        <div className="mx-auto flex w-full max-w-3xl items-baseline justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-accent uppercase">{copy.brand}</p>
-            <h1 className="font-serif text-2xl text-ink">{copy.title}</h1>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        kicker={copy.brand}
+        title={copy.title}
+        width="max-w-3xl"
+        actions={
+          <>
             {!showingGuide && (
               <button
                 type="button"
                 onClick={() => setGuideOpen(true)}
-                className="flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-ink hover:border-accent"
+                className={`flex items-center gap-1.5 ${pillButton}`}
                 aria-label={copy.guideButtonLabel}
                 aria-haspopup="dialog"
               >
@@ -92,17 +95,12 @@ export function ChatScreen() {
                 {copy.guideButton}
               </button>
             )}
-            <button
-              type="button"
-              onClick={toggleLocale}
-              className="rounded-full border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-ink hover:border-accent"
-              aria-label={copy.languageToggleLabel}
-            >
-              {copy.languageToggle}
-            </button>
-          </div>
-        </div>
-      </header>
+            <Link to="/ops" className={pillButton} aria-label={copy.ops.linkLabel}>
+              {copy.ops.link}
+            </Link>
+          </>
+        }
+      />
       <GuideDialog
         open={guideOpen}
         onClose={() => setGuideOpen(false)}
@@ -126,11 +124,7 @@ export function ChatScreen() {
                     </div>
                   )}
                   {item.kind === "assistant" && <AssistantMessage reply={item.reply} />}
-                  {item.kind === "error" && (
-                    <p className="rounded-2xl border border-danger/20 bg-danger-bg px-4 py-3 text-sm text-danger" role="alert">
-                      {item.text}
-                    </p>
-                  )}
+                  {item.kind === "error" && <ErrorAlert message={item.text} />}
                 </li>
               ))}
               {mutation.isPending && (

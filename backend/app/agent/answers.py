@@ -2,10 +2,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.agent.tools import ToolObservation
-from app.schemas.chat import Citation
+from app.domain.models import Mode
+from app.schemas.chat import ChatResponse, Citation, ToolCallResult
 
 SEARCH_DOCUMENTS = "search_documents"
 DEFAULT_ANSWER = "I could not complete that request."
+MISSING_USER = "I can look that up, but I need a user_id to call the HR tools."
 
 Formatter = Callable[[dict[str, Any]], str]
 
@@ -51,6 +53,20 @@ def compose_answer(observations: list[ToolObservation]) -> str:
         if text:
             parts.append(text)
     return " ".join(parts) if parts else DEFAULT_ANSWER
+
+
+def agent_response(request_id: str, message: str, answer: str, observations: list[ToolObservation]) -> ChatResponse:
+    return ChatResponse.create(
+        request_id=request_id,
+        message=message,
+        answer=answer,
+        sources=sources_from(observations),
+        citations=citations_from(observations),
+        tool_calls=[
+            ToolCallResult(name=item.name, arguments=item.arguments, result=item.result) for item in observations
+        ],
+        mode=Mode.AGENT,
+    )
 
 
 def sources_from(observations: list[ToolObservation]) -> list[str]:

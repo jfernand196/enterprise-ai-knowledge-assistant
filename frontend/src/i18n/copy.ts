@@ -9,6 +9,47 @@ export interface GuidePrompt {
   employee?: string
 }
 
+export interface OpsCopy {
+  link: string
+  linkLabel: string
+  back: string
+  kicker: string
+  title: string
+  lead: string
+  loading: string
+  loadFailed: string
+  requests: string
+  avgLatency: string
+  p95Latency: string
+  tokens: string
+  cost: string
+  satisfaction: string
+  blocked: string
+  noFeedback: string
+  byVersion: string
+  byVersionHint: string
+  byModel: string
+  group: string
+  recentTraces: string
+  noTraces: string
+  when: string
+  question: string
+  mode: string
+  model: string
+  feedback: string
+  evaluation: string
+  evaluationHint: string
+  runEvaluation: string
+  runningEvaluation: string
+  passRate: string
+  history: string
+  noHistory: string
+  case: string
+  checks: string
+  passed: string
+  failed: string
+}
+
 export interface Copy {
   documentTitle: string
   brand: string
@@ -47,8 +88,14 @@ export interface Copy {
   tools: Record<string, string>
   timeout: string
   requestFailed: string
+  feedbackPrompt: string
+  feedbackUp: string
+  feedbackDown: string
+  feedbackThanks: string
+  feedbackFailed: string
   policyPrompts: GuidePrompt[]
   employeePrompts: GuidePrompt[]
+  ops: OpsCopy
 }
 
 const policyPrompts = [
@@ -124,6 +171,51 @@ export const copy: Record<Locale, Copy> = {
     },
     timeout: "La respuesta tardó demasiado. Vuelve a preguntar.",
     requestFailed: "No pude obtener una respuesta. Inténtalo de nuevo.",
+    feedbackPrompt: "¿Te sirvió esta respuesta?",
+    feedbackUp: "Sí, me sirvió",
+    feedbackDown: "No me sirvió",
+    feedbackThanks: "Gracias. Queda registrado en la traza.",
+    feedbackFailed: "No se pudo guardar. Inténtalo otra vez.",
+    ops: {
+      link: "Ops",
+      linkLabel: "Ver métricas, trazas y evaluaciones",
+      back: "Volver al chat",
+      kicker: "LLMOps",
+      title: "Operación del asistente",
+      lead: "Latencia, tokens, coste y feedback de cada respuesta. Las trazas se guardan en data/llmops y sobreviven a un reinicio.",
+      loading: "Cargando…",
+      loadFailed: "No se pudo leer el backend.",
+      requests: "Peticiones",
+      avgLatency: "Latencia media",
+      p95Latency: "Latencia p95",
+      tokens: "Tokens (entrada / salida)",
+      cost: "Coste estimado",
+      satisfaction: "Satisfacción",
+      blocked: "Bloqueadas",
+      noFeedback: "Sin votos",
+      byVersion: "Por orquestador",
+      byVersionHint: "prompt_version separa native (v1), langchain-v1 y langgraph-v1.",
+      byModel: "Por modelo",
+      group: "Grupo",
+      recentTraces: "Trazas recientes",
+      noTraces: "Todavía no hay trazas. Haz una pregunta en el chat.",
+      when: "Hora",
+      question: "Pregunta",
+      mode: "Modo",
+      model: "Modelo",
+      feedback: "Voto",
+      evaluation: "Evaluación",
+      evaluationHint: "Corre las 7 preguntas de data/eval/questions.json por el mismo camino que el chat: política, agente, autorización y guardrail. Con Gemini tarda unos minutos.",
+      runEvaluation: "Correr evaluación",
+      runningEvaluation: "Evaluando…",
+      passRate: "Aprobadas",
+      history: "Corridas anteriores",
+      noHistory: "Aún no hay corridas.",
+      case: "Caso",
+      checks: "Chequeos",
+      passed: "Pasa",
+      failed: "Falla",
+    },
     policyPrompts: [
       { prompt: policyPrompts[0], expect: "15 días el primer año, 20 después de dos años." },
       { prompt: policyPrompts[1], expect: "Sí, en correo, VPN y Databricks." },
@@ -183,6 +275,51 @@ export const copy: Record<Locale, Copy> = {
     },
     timeout: "The answer took too long. Ask again.",
     requestFailed: "I could not get an answer. Try again.",
+    feedbackPrompt: "Was this answer helpful?",
+    feedbackUp: "Yes, helpful",
+    feedbackDown: "Not helpful",
+    feedbackThanks: "Thanks. It is saved on the trace.",
+    feedbackFailed: "Could not save it. Try again.",
+    ops: {
+      link: "Ops",
+      linkLabel: "See metrics, traces, and evaluations",
+      back: "Back to chat",
+      kicker: "LLMOps",
+      title: "Assistant operations",
+      lead: "Latency, tokens, cost, and feedback for every answer. Traces are saved in data/llmops and survive a restart.",
+      loading: "Loading…",
+      loadFailed: "Could not read the backend.",
+      requests: "Requests",
+      avgLatency: "Average latency",
+      p95Latency: "p95 latency",
+      tokens: "Tokens (input / output)",
+      cost: "Estimated cost",
+      satisfaction: "Satisfaction",
+      blocked: "Blocked",
+      noFeedback: "No votes",
+      byVersion: "By orchestrator",
+      byVersionHint: "prompt_version separates native (v1), langchain-v1, and langgraph-v1.",
+      byModel: "By model",
+      group: "Group",
+      recentTraces: "Recent traces",
+      noTraces: "No traces yet. Ask something in the chat.",
+      when: "Time",
+      question: "Question",
+      mode: "Mode",
+      model: "Model",
+      feedback: "Vote",
+      evaluation: "Evaluation",
+      evaluationHint: "Runs the 7 questions in data/eval/questions.json through the same path as the chat: policy, agent, authorization, and guardrail. With Gemini it takes a few minutes.",
+      runEvaluation: "Run evaluation",
+      runningEvaluation: "Evaluating…",
+      passRate: "Passed",
+      history: "Previous runs",
+      noHistory: "No runs yet.",
+      case: "Case",
+      checks: "Checks",
+      passed: "Pass",
+      failed: "Fail",
+    },
     policyPrompts: [
       { prompt: policyPrompts[0], expect: "15 days in the first year, 20 after two years." },
       { prompt: policyPrompts[1], expect: "Yes, for email, VPN, and Databricks." },

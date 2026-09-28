@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class TraceResponse(BaseModel):
@@ -15,9 +17,13 @@ class TraceResponse(BaseModel):
     tool_calls: list[str]
     blocked: bool
     blocked_reason: str | None
+    question: str
+    created_at: str
+    feedback: Literal["up", "down"] | None
+    feedback_comment: str | None
 
 
-class MetricsResponse(BaseModel):
+class UsageSummary(BaseModel):
     requests: int
     blocked: int
     error_rate: float
@@ -28,3 +34,21 @@ class MetricsResponse(BaseModel):
     cost_usd: float
     rag_requests: int
     agent_requests: int
+    feedback_up: int
+    feedback_down: int
+    satisfaction: float | None
+
+
+class GroupMetrics(UsageSummary):
+    key: str
+
+
+class MetricsResponse(UsageSummary):
+    by_prompt_version: list[GroupMetrics]
+    by_model: list[GroupMetrics]
+
+
+class FeedbackRequest(BaseModel):
+    request_id: str = Field(min_length=1, max_length=64)
+    rating: Literal["up", "down"]
+    comment: str | None = Field(default=None, max_length=500)

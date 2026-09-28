@@ -2,6 +2,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.models import EXTRACTIVE_MODEL_ID
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -13,7 +15,7 @@ class Settings(BaseSettings):
     )
     app_name: str = "Enterprise AI Knowledge Assistant"
     app_version: str = "0.7.0"
-    model_name: str = "grounded-extractive-v1"
+    model_name: str = EXTRACTIVE_MODEL_ID
     prompt_version: str = "v1"
     llm_provider: str = "extractive"
     model_id: str = "gemini-3.6-flash"
@@ -28,6 +30,8 @@ class Settings(BaseSettings):
     eval_path: Path = PROJECT_ROOT / "data" / "eval" / "questions.json"
     employees_path: Path = PROJECT_ROOT / "data" / "hr" / "employees.json"
     lakehouse_dir: Path = PROJECT_ROOT / "data" / "lakehouse"
+    traces_path: str = str(PROJECT_ROOT / "data" / "llmops" / "traces.jsonl")
+    evaluations_path: str = str(PROJECT_ROOT / "data" / "llmops" / "evaluations.jsonl")
     lakehouse_backend: str = "databricks"
     databricks_profile: str = "dbc-a6df516d-a455"
     databricks_warehouse_id: str = "5cd458306322a115"
@@ -36,6 +40,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     top_k: int = 3
     candidate_k: int = 10
+
+
+def optional_path(value: str) -> Path | None:
+    """An empty setting keeps that store in memory only."""
+    return Path(value) if value.strip() else None
 
 
 settings = Settings()

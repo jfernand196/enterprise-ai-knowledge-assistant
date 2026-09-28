@@ -1,10 +1,10 @@
 import asyncio
 
-from app.agent.answers import citations_from, compose_answer, sources_from
+from app.agent.answers import MISSING_USER, agent_response, compose_answer
 from app.agent.planner import KeywordPlanner, PlannerPort
 from app.agent.tools import ToolCall, ToolObservation, ToolRegistry
 from app.llmops.guardrails import authorize_tool
-from app.schemas.chat import ChatRequest, ChatResponse, ToolCallResult
+from app.schemas.chat import ChatRequest, ChatResponse
 
 
 class AgentService:
@@ -26,23 +26,11 @@ class AgentService:
     async def answer(self, payload: ChatRequest, request_id: str) -> ChatResponse:
         calls = await asyncio.to_thread(self._planner.plan, payload.message, payload.user_id)
         if payload.user_id is None:
-            return ChatResponse.create(
-                request_id=request_id,
-                message=payload.message,
-                answer="I can look that up, but I need a user_id to call the HR tools.",
-                mode="agent",
-            )
+            return agent_response(request_id, payload.message, MISSING_USER, [])
 
         observations = [self._execute_authorized(call, payload.user_id) for call in calls]
-        response = ChatResponse.create(
-            request_id=request_id,
-            message=payload.message,
-            answer=await self._write_answer(payload.message, observations),
-            sources=sources_from(observations),
-            citations=citations_from(observations),
-            tool_calls=[_to_tool_result(item) for item in observations],
-            mode="agent",
-        )
+        answer = await self._write_answer(payload.message, observations)
+        response = agent_response(request_id, payload.message, answer, observations)
         writer = self._answer_writer
         if writer is not None:
             response.model = getattr(writer, "model_id", response.model)
@@ -67,11 +55,3 @@ class AgentService:
                 result={"error": denied},
             )
         return self._registry.execute(call)
-
-
-def _to_tool_result(item: ToolObservation) -> ToolCallResult:
-    return ToolCallResult(
-        name=item.name,
-        arguments=item.arguments,
-        result=item.result,
-    )

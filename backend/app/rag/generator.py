@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from app.domain.models import ScoredChunk
+from app.domain.models import EXTRACTIVE_MODEL_ID, ScoredChunk
 
 NO_CONTEXT_ANSWER = (
     "I don't have enough information in the company knowledge base to answer that."
@@ -14,7 +14,7 @@ class LlmPort(Protocol):
 class GroundedGenerator:
     """Extractive generator that stays faithful to retrieved chunks."""
 
-    model_id = "grounded-extractive-v1"
+    model_id = EXTRACTIVE_MODEL_ID
     last_usage: tuple[int, int] | None = None
 
     def generate(self, question: str, chunks: list[ScoredChunk]) -> str:

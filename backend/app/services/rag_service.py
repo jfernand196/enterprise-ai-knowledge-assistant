@@ -1,7 +1,7 @@
 import asyncio
 
 from app.core.text import truncate_excerpt
-from app.domain.models import ScoredChunk
+from app.domain.models import Mode, ScoredChunk
 from app.knowledge.index import KnowledgeIndex
 from app.schemas.chat import ChatRequest, ChatResponse, Citation
 
@@ -24,7 +24,7 @@ class RagService:
             answer=answer,
             sources=list(dict.fromkeys(item.chunk.title for item in relevant)),
             citations=[_to_citation(item) for item in relevant],
-            mode="rag",
+            mode=Mode.RAG,
         )
         response.model = getattr(self._index.generator, "model_id", response.model)
         usage = getattr(self._index.generator, "last_usage", None)

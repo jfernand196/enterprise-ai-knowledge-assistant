@@ -14,7 +14,7 @@ from app.agent.tools import (
     ToolRegistry,
 )
 from app.api.routes import chat, evaluations, health, lakehouse, mcp_tools, observability
-from app.core.config import settings
+from app.core.config import optional_path, settings
 from app.hr.repository import HrRepository
 from app.knowledge.gold import load_gold_documents
 from app.knowledge.index import build_knowledge_index
@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             *[McpToolAdapter(mcp_client, spec) for spec in mcp_client.list_tools()],
         ]
     )
-    traces = TraceStore()
+    traces = TraceStore(optional_path(settings.traces_path))
     planner = None
     answer_writer = None
     if isinstance(generator, GeminiGroundedGenerator):
@@ -118,7 +118,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             groq_model_id=settings.groq_model_id,
         )
         prompt_version = f"langchain-{settings.prompt_version}"
-    app.state.chat_service = ChatService(
+    chat_service = ChatService(
         rag_service,
         agent_service,
         traces,
@@ -128,7 +128,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         output_rate=settings.output_token_rate,
         orchestrator=orchestrator,
     )
-    app.state.evaluation_service = EvaluationService(orchestrator or rag_service, settings.eval_path)
+    app.state.chat_service = chat_service
+    app.state.evaluation_service = EvaluationService(
+        chat_service,
+        settings.eval_path,
+        optional_path(settings.evaluations_path),
+    )
     app.state.mcp_catalog_service = McpCatalogService(mcp_client)
     app.state.lakehouse_service = build_lakehouse_service(
         backend=settings.lakehouse_backend,

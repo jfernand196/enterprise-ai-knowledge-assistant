@@ -3,17 +3,18 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.graph.state import CompiledStateGraph
 
-from app.agent.answers import DEFAULT_ANSWER, citations_from, sources_from
+from app.agent.answers import DEFAULT_ANSWER, agent_response
 from app.agent.tools import ToolRegistry
+from app.domain.models import Mode
 from app.lc.agent import AGENT_PROMPT
 from app.lc.models import build_chat_models
 from app.lc.router import StructuredRouter
-from app.lc.services import RouterPort, to_citation
+from app.lc.services import RouterPort, rag_response
 from app.lg.graph import build_graph, observations_from
 from app.lg.state import GraphState
 from app.lg.tools import build_graph_tools
 from app.rag.retriever import Retriever
-from app.schemas.chat import ChatRequest, ChatResponse, ToolCallResult
+from app.schemas.chat import ChatRequest, ChatResponse
 
 RECURSION_LIMIT = 12
 
@@ -28,31 +29,12 @@ class LangGraphService:
         try:
             state = await self._graph.ainvoke(initial_state(payload), config={"recursion_limit": RECURSION_LIMIT})
         except GraphRecursionError:
-            return ChatResponse.create(request_id=request_id, message=payload.message, answer=DEFAULT_ANSWER, mode="agent")
-        if state["route"] == "rag":
-            documents = state.get("documents") or []
-            response = ChatResponse.create(
-                request_id=request_id,
-                message=payload.message,
-                answer=state["answer"],
-                sources=list(dict.fromkeys(document.metadata["title"] for document in documents)),
-                citations=[to_citation(document) for document in documents],
-                mode="rag",
-            )
+            return agent_response(request_id, payload.message, DEFAULT_ANSWER, [])
+        if state["route"] == Mode.RAG:
+            response = rag_response(request_id, payload.message, state["answer"], state.get("documents") or [])
         else:
             observations = observations_from(state["messages"], payload.user_id)
-            response = ChatResponse.create(
-                request_id=request_id,
-                message=payload.message,
-                answer=state["answer"],
-                sources=sources_from(observations),
-                citations=citations_from(observations),
-                tool_calls=[
-                    ToolCallResult(name=item.name, arguments=item.arguments, result=item.result)
-                    for item in observations
-                ],
-                mode="agent",
-            )
+            response = agent_response(request_id, payload.message, state["answer"], observations)
         if state.get("model"):
             response.model = state["model"]
         response.input_tokens = state.get("input_tokens", 0)

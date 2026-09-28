@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
+from app.llmops.tracing import TraceRecord, TraceStore
 
 
 def test_prompt_injection_is_blocked_and_traced(client: TestClient) -> None:
@@ -53,3 +57,56 @@ def test_successful_chat_writes_trace_and_metrics(client: TestClient) -> None:
     metrics = client.get("/metrics").json()
     assert metrics["requests"] >= 1
     assert metrics["rag_requests"] >= 1
+    assert trace.json()["question"] == "What is the vacation policy?"
+    assert any(group["key"] == "v1" for group in metrics["by_prompt_version"])
+
+
+def test_feedback_is_attached_to_the_trace_and_counted(client: TestClient) -> None:
+    request_id = client.post("/chat", json={"message": "What are customer support hours?"}).json()["request_id"]
+
+    saved = client.post("/feedback", json={"request_id": request_id, "rating": "down", "comment": "Too long"})
+
+    assert saved.status_code == 204
+    trace = client.get(f"/traces/{request_id}").json()
+    assert (trace["feedback"], trace["feedback_comment"]) == ("down", "Too long")
+    assert client.get("/metrics").json()["feedback_down"] >= 1
+
+
+def test_feedback_for_an_unknown_request_is_404(client: TestClient) -> None:
+    response = client.post("/feedback", json={"request_id": "missing", "rating": "up"})
+
+    assert response.status_code == 404
+
+
+def test_trace_store_reloads_traces_and_feedback_from_jsonl(tmp_path: Path) -> None:
+    path = tmp_path / "traces.jsonl"
+    store = TraceStore(path)
+    store.add(_record("req-1", "langgraph-v1", latency_ms=1000))
+    store.add(_record("req-2", "v1", latency_ms=3000))
+    store.add_feedback("req-1", "up", None)
+
+    reloaded = TraceStore(path)
+
+    assert reloaded.get("req-1").feedback == "up"
+    metrics = reloaded.metrics()
+    assert metrics["requests"] == 2
+    assert metrics["satisfaction"] == 1.0
+    groups = {group["key"]: group for group in metrics["by_prompt_version"]}
+    assert groups["langgraph-v1"]["avg_latency_ms"] == 1000
+    assert groups["v1"]["avg_latency_ms"] == 3000
+
+
+def _record(request_id: str, prompt_version: str, latency_ms: int) -> TraceRecord:
+    return TraceRecord(
+        request_id=request_id,
+        user_id=None,
+        model="gemini-3.5-flash",
+        prompt_version=prompt_version,
+        mode="rag",
+        latency_ms=latency_ms,
+        input_tokens=400,
+        output_tokens=100,
+        cost_usd=0.0001,
+        retrieved_documents=["Vacation Policy"],
+        tool_calls=[],
+    )

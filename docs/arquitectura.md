@@ -20,7 +20,8 @@ React  →  POST /chat
                  ├── no  →  RAG (recuperar fragmentos + generar)
                  └── sí  →  agent (plan JSON, ejecutar tools, redactar)
             →  guardrail de salida
-            →  traza (latencia, tokens, coste, docs, tools)
+            →  traza (latencia, tokens, coste, docs, tools) en data/llmops/traces.jsonl
+React  →  POST /feedback  →  voto 👍 / 👎 sobre esa traza
 ```
 
 `ChatService` es el orquestador. El planner corre en un hilo (`asyncio.to_thread`) porque la llamada al modelo es síncrona. Si el planner dice que no hay tools, entra `RagService`. Si dice que sí, entra `AgentService`. Con `ORCHESTRATOR=langgraph` el paso de ruta lo hace el grafo (ver [Orquestadores intercambiables](#orquestadores-intercambiables)); los guardrails, las métricas y la traza siguen en `ChatService`.
@@ -129,13 +130,63 @@ El chat arranca leyendo el oro. Si esa tabla está vacía, el índice no se cons
 
 Los identificadores SQL pasan por `quote_identifier` con una allowlist `[A-Za-z_][A-Za-z0-9_]*`. El catálogo y el esquema no se interpolan desde el usuario.
 
-## Guardrails y trazas
+## LLMOps
 
-`check_input` rechaza frases de inyección (`ignore previous instructions`, `reveal the system prompt`, `you are now`) con HTTP 400. `check_output` sustituye la respuesta si el modelo intenta volcar el system prompt.
+El ciclo es: cada respuesta deja una traza, el usuario la califica, las métricas se agrupan por orquestador y modelo, y una evaluación fija decide si un cambio se puede subir. Todo vive en `app/llmops` y en los servicios de observabilidad y evaluación.
 
-Cada `/chat` escribe una traza: `request_id`, usuario, modelo, versión de prompt, modo (`rag`, `agent` o `blocked`), latencia, tokens, coste, documentos recuperados y tools. Los tokens salen del proveedor: `total_input_tokens` y `total_output_tokens` en la Interactions API, `usage_metadata` en LangChain. En el agente se suman planner y writer (o cada vuelta del grafo). Solo si ambos contadores siguen en cero se estiman con caracteres / 4. El coste usa tarifas de referencia (`input_token_rate`, `output_token_rate`) para que `/metrics` tenga forma aunque el proveedor no devuelva el usage. `GET /traces` y `GET /traces/{request_id}` exponen eso.
+### Guardrails
 
-`POST /evaluations` corre el conjunto de `data/eval/questions.json` contra el mismo RAG. Sirve para ver si un cambio de chunk o de prompt empeora las respuestas de política, no para atender al usuario.
+`check_input` rechaza frases de inyección (`ignore previous instructions`, `reveal the system prompt`, `you are now`) con HTTP 400. `check_output` sustituye la respuesta si el modelo intenta volcar el system prompt. Una petición bloqueada también deja traza, con modo `blocked` y el motivo.
+
+### Trazas
+
+Cada `/chat` escribe una traza: `request_id`, fecha, pregunta, usuario, modelo, versión de prompt, modo (`rag`, `agent` o `blocked`), latencia, tokens, coste, documentos recuperados, tools y feedback.
+
+- Los tokens salen del proveedor: `total_input_tokens` y `total_output_tokens` en la Interactions API, `usage_metadata` en LangChain. En el agente se suman planner y writer (o cada vuelta del grafo). Solo si ambos contadores siguen en cero se estiman con caracteres / 4.
+- El coste usa tarifas de referencia (`input_token_rate`, `output_token_rate`), así `/metrics` tiene forma aunque el proveedor no devuelva el usage.
+- `TraceStore` guarda en memoria y agrega cada evento a `data/llmops/traces.jsonl`. Al arrancar relee el archivo, así un reload de uvicorn no borra el historial. El archivo es de solo agregar: el feedback es un evento aparte (`type: feedback`) y no reescribe la línea de la traza. Si el proceso muere a mitad de escritura, se pierde como mucho la última línea.
+- Por qué JSONL y no una base de datos: es un proceso, un escritor y pocas peticiones. Un archivo se lee con `jq` y se puede cargar a una tabla Delta sin traducir. Con varias réplicas iría a una tabla o a un colector OpenTelemetry.
+- La traza guarda la pregunta del usuario. Por eso el archivo está en `.gitignore` y `TRACES_PATH=` vacío lo deja solo en memoria.
+
+### Feedback
+
+`POST /feedback` recibe `request_id`, `up` o `down` y un comentario opcional. Devuelve 404 si la traza no existe, así un voto no queda huérfano. La interfaz muestra 👍 y 👎 debajo de cada respuesta.
+
+La satisfacción (`up / (up + down)`) es la única señal que viene del usuario y no del sistema. Una respuesta rápida y barata que la gente vota 👎 es un problema que la latencia no muestra.
+
+### Métricas
+
+`GET /metrics` devuelve el total y dos agrupaciones: `by_prompt_version` y `by_model`. `prompt_version` es `v1`, `langchain-v1` o `langgraph-v1`, así que la primera tabla compara los tres orquestadores con las mismas preguntas: latencia media y p95, tokens, coste, satisfacción y bloqueos. `by_model` muestra cuánto tráfico cae a los fallbacks (por ejemplo `gemini-3.5-flash-lite` cuando 3.6 da 429).
+
+### Evaluación
+
+`data/eval/questions.json` tiene siete casos. Cada caso declara solo lo que se revisa:
+
+| Chequeo | Cuándo aplica | Qué mide |
+| --- | --- | --- |
+| `route` | Siempre | El modo fue `rag`, `agent` o `blocked` según lo esperado |
+| `retrieval` | `expected_document` | El documento correcto está entre las fuentes |
+| `tools` | `expected_tools` | Se llamaron esas tools |
+| `generation` | `expected_phrases` | La respuesta contiene las frases (por ejemplo “8” o “not allowed”) |
+| `forbidden` | `forbidden_phrases` | La respuesta no contiene la frase (Ana no debe recibir “not allowed”) |
+
+Los casos cubren tres políticas, el saldo de Juan, la solicitud de Ana, la solicitud negada a Juan y una inyección de prompt. La evaluación pasa por `ChatService.run`: guardrails, ruteo y el orquestador activo, igual que `/chat`, pero sin escribir traza, para que no cambie `/metrics`.
+
+`POST /evaluations` devuelve el informe y agrega un resumen a `data/llmops/evaluations.jsonl`. `GET /evaluations` lista las corridas anteriores con su `prompt_version`, así se ve si un cambio de chunk, prompt u orquestador bajó la tasa.
+
+El filtro de calidad para CI:
+
+```
+cd backend && .venv/bin/python -m app.llmops.gate --min-pass-rate 0.85
+```
+
+Imprime cada caso con sus chequeos fallidos y sale con código 1 si la tasa queda por debajo del mínimo. En modo extractivo corre sin red; con Gemini mide el modelo real.
+
+Las comparaciones por frase son deliberadamente simples. Un juez LLM (groundedness, relevancia) daría una señal más fina, pero cuesta cuota en cada corrida y también se equivoca. Para siete casos con respuestas cortas, una frase exacta es más barata y reproducible.
+
+### Panel
+
+`/ops` en el frontend muestra las métricas, las dos agrupaciones, las últimas 20 trazas con su voto y un botón para correr la evaluación con su historial. Se refresca cada 15 segundos.
 
 ## Frontend
 
@@ -145,10 +196,17 @@ La cromática de la interfaz está en español o en inglés (`localStorage`, cla
 
 La guía de la pantalla vacía separa políticas (se envían al pulsar) de preguntas de empleado (rellenan el selector y el texto, y la persona pulsa Preguntar). Eso evita mandar “crea una solicitud” sin haber elegido a Ana Gomez o a Juan Perez. Con la conversación ya empezada, el botón **ⓘ Guía** del encabezado abre la misma guía en un `<dialog>` nativo.
 
-Cada respuesta muestra tokens de entrada, tokens de salida y latencia. Las fuentes se deduplican por documento: las que la respuesta nombra van primero y el resto queda plegado en “También consultados”.
+Cada respuesta muestra tokens de entrada, tokens de salida, latencia y los botones de feedback. El enlace **Ops** del encabezado abre el panel de LLMOps. Las fuentes se deduplican por documento: las que la respuesta nombra van primero y el resto queda plegado en “También consultados”.
 
 `fetch` corta a los 90 segundos. Sin ese límite, un reload de uvicorn a mitad de la llamada deja el botón en “Buscando…” para siempre. Con `gemini-3.5-flash` una respuesta tarda entre 20 y 40 segundos, así que el límite deja margen.
 
+## Guía de estudio
+
+Resumen para la entrevista: el recorrido completo y qué papel cumple cada pieza.
+
+### Vista general
+
+```
                          USER
                            │
                            ▼
@@ -168,25 +226,19 @@ Cada respuesta muestra tokens de entrada, tokens de salida y latencia. Las fuent
                            ▼
                  ┌───────────────────┐
                  │    ORCHESTRATOR   │
-                 │                   │
-                 │ native             │
-                 │ langchain          │
-                 │ langgraph          │
+                 │  native           │
+                 │  langchain        │
+                 │  langgraph        │
                  └─────────┬─────────┘
                            │
                 ┌──────────┴──────────┐
-                │                     │
                 ▼                     ▼
                RAG                  AGENT
                 │                     │
                 │                     ▼
-                │                  Tools
-                │                     │
+                │                   Tools (MCP)
                 │               ┌─────┼─────┐
-                │               │     │     │
-                │            Profile Balance HR
-                │                       Request
-                │
+                │            Profile Balance HR Request
                 ▼
         Databricks Gold
         gold.documents
@@ -203,182 +255,64 @@ Cada respuesta muestra tokens de entrada, tokens de salida y latencia. Las fuent
                 ▼
                LLM
                 │
-                └──────────┐
-                           ▼
-                    Output Guardrail
-                           │
-                           ▼
-                        Trace
+                ▼
+         Output Guardrail
+                │
+                ▼
+     Trace → data/llmops/traces.jsonl
+```
 
+### Databricks: qué papel juega
 
+Databricks es la plataforma de datos. Prepara y sirve los documentos que alimentan el RAG, pero **no es el RAG**.
 
-Databricks: ¿qué papel juega?
+```
+Documents → Bronze → Silver → Gold
+```
 
-Databricks es principalmente tu plataforma de datos.
+- **Bronze:** los documentos llegan tal cual (`vacations.md`, `security.md`, `support.md`, `product_vision.md`).
+- **Silver:** se limpian y transforman (`category = trim(category)`, `content_length`).
+- **Gold:** la capa que consume la aplicación, `knowledge_assistant.gold.documents`.
 
-Tienes:
+### Qué ocurre después de Gold
 
-Documents
-   ↓
-Bronze
-   ↓
-Silver
-   ↓
-Gold
-Bronze
+Aquí entra el RAG. El corpus es pequeño, por eso el índice vive en memoria.
 
-Los documentos llegan prácticamente tal cual:
+```
+gold.documents → load_gold_documents() → chunks → TF-IDF → índice en RAM
+```
 
-vacations.md
-security.md
-support.md
-product_vision.md
-Silver
+Cuando llega una pregunta como “How many vacation days can I carry over?”:
 
-Los limpias/transformas.
+```
+Question → TF-IDF vector → cosine similarity → top 10 candidatos → lexical reranker → top 3 chunks → LLM
+```
 
-Por ejemplo:
+### Por qué existe el reranker
 
-category = trim(category)
-content_length = ...
-Gold
+El primer resultado de TF-IDF no siempre es el mejor. El coseno puede poner Product Overview por encima de Vacation Policy. El reranker mira el solapamiento de términos de la pregunta y sube el chunk que realmente los menciona.
 
-Es la capa que la aplicación consume.
+No es perfecto: para “What is the vacation policy?” Product Overview sigue quedando primero. Vacation Policy entra igual en el top 3 y el LLM la usa. Por eso la evaluación comprueba que el documento esté entre las fuentes, no que sea el primero.
 
-knowledge_assistant.gold.documents
+### Dónde entra el LLM
 
-Entonces:
+```
+Question + chunks relevantes → LLM → Answer
+```
 
-Databricks prepara y sirve los documentos que alimentan el RAG.
+El prompt le exige responder solo con los extractos, nombrar el documento y copiar cada número y excepción. Así se evita que invente políticas. El RAG es **retrieval + grounded generation**.
 
-Importante:
+### El agente
 
-Databricks no es el RAG.
+“How many vacation days do I have?” no se responde con RAG: la política dice cuántos días da la empresa, no cuántos le quedan a Juan.
 
-4. ¿Qué ocurre después de Gold?
+```
+Question → Agent → get_employee_profile + get_vacation_balance → LLM → "Juan Perez, you have 8 vacation days left."
+```
 
-Aquí entra tu RAG.
+### Leer y escribir
 
-gold.documents
-       ↓
-load_gold_documents()
-       ↓
-chunks
-       ↓
-TF-IDF
-       ↓
-vector index en RAM
-
-Tu corpus es pequeño, por eso puedes mantener el índice en memoria.
-
-Cuando llega:
-
-"How many vacation days can I carry over?"
-
-haces:
-
-Question
-   ↓
-TF-IDF vector
-   ↓
-Cosine similarity
-   ↓
-Top 10 candidates
-   ↓
-Lexical reranker
-   ↓
-Top 3 chunks
-
-Y esos 3 chunks se entregan al LLM.
-
-5. ¿Por qué existe el reranker?
-
-Porque el primer resultado de TF-IDF no necesariamente es el mejor.
-
-Ejemplo:
-
-Query:
-"How many vacation days can I carry over?"
-
-TF-IDF puede devolver:
-
-1. Product Overview
-2. Vacation Policy
-3. Security Policy
-
-Pero tú sabes que:
-
-Vacation Policy
-
-es el documento relevante.
-
-Entonces el reranker mira el solapamiento de términos y puede reorganizar:
-
-1. Vacation Policy
-2. Product Overview
-3. Security Policy
-6. ¿Y dónde entra el LLM?
-
-Después de recuperar contexto:
-
-Question
-   +
-Relevant chunks
-       ↓
-      LLM
-       ↓
-Answer
-
-El LLM recibe instrucciones como:
-
-Responde únicamente utilizando los extractos proporcionados.
-
-Esto intenta evitar que invente políticas.
-
-Por eso tu RAG es:
-
-Retrieval
-   +
-Grounded Generation
-7. ¿Y el Agent?
-
-Ahora viene la otra mitad.
-
-Pregunta:
-
-"How many vacation days do I have?"
-
-RAG puede decir:
-
-La política permite X días...
-
-pero no sabe cuánto tienes tú.
-
-Entonces:
-
-Question
-   ↓
-Agent
-   ↓
-get_employee_profile
-   ↓
-get_vacation_balance
-   ↓
-LLM
-   ↓
-Answer
-
-Por ejemplo:
-
-Juan Perez
-8 vacation days
-
-El documento de política y el dato personal se combinan.
-
-8. ¿Qué pasa si quiero crear una solicitud?
-
-Aquí tienes una diferencia muy importante:
-
+```
 READ
  ├── get_employee_profile
  ├── get_vacation_balance
@@ -386,227 +320,87 @@ READ
 
 WRITE
  └── create_hr_request
+```
 
-Crear una solicitud es una acción, no una consulta.
+Crear una solicitud es una acción, no una consulta. Por eso pasa por autorización:
 
-Por eso necesitas autorización:
+```
+User → Agent → create_hr_request → authorize_tool() → ¿tiene permiso?
+                                                       ├── NO  → error (emp-1, Juan)
+                                                       └── SÍ  → execute (emp-2, Ana)
+```
 
-User
- ↓
-Agent
- ↓
-create_hr_request
- ↓
-authorize_tool()
- ↓
-¿Tiene permiso?
- │
- ├── NO → error
- │
- └── YES → execute
+Segunda protección: si el modelo dice `user_id = emp-2`, la aplicación no le cree. Cada orquestador lo resuelve a su manera:
 
-En tu ejemplo:
+- **Native:** `_with_user` pisa el argumento con el `user_id` de la petición.
+- **LangChain:** `ScopedTools` construye las tools por petición, ya atadas al `user_id`.
+- **LangGraph:** `InjectedState("user_id")` saca el argumento del schema que ve el modelo y lo llena desde el estado.
 
-emp-2 → permitido
-emp-1 → rechazado
+### MCP
 
-Y hay otra protección:
+MCP es la forma de exponer las tools de RR. HH. En lugar de que el agente importe `get_vacation_balance`, pasa por el protocolo:
 
-model says:
-user_id = emp-2
+```
+Agent → MCP Client → MCP Server → tools/list, tools/call → HR tools
+```
 
-Tu aplicación no confía en eso.
+El agente descubre las tools por protocolo. Hoy el servidor corre in-process; en producción iría separado (stdio o SSE).
 
-_with_user utiliza el user_id autenticado.
+### Native, LangChain y LangGraph
 
-Eso es seguridad importante.
+No son tres arquitecturas: es el mismo sistema con tres formas de orquestar el LLM y el agente.
 
-9. ¿Qué es MCP aquí?
-
-MCP es la forma en que expones las herramientas de RR. HH.
-
-En lugar de:
-
-Agent
-  ↓
-import get_vacation_balance
-
-tienes:
-
-Agent
-  ↓
-MCP Client
-  ↓
-MCP Server
-  ↓
-tools/list
-tools/call
-  ↓
-HR tools
-
-Así el agente puede descubrir las herramientas mediante un protocolo.
-
-Tu servidor MCP actualmente está in-process, es decir, está dentro de la misma aplicación.
-
-En producción podría estar separado.
-
-10. Ahora viene lo más importante: Native vs LangChain vs LangGraph
-
-Esta es la parte nueva de tu repo.
-
-No tienes tres arquitecturas diferentes.
-
-Tienes:
-
+```
                   MISMO SISTEMA
                        │
-              ChatService
+                  ChatService
                        │
           ┌────────────┼────────────┐
           ▼            ▼            ▼
        Native       LangChain    LangGraph
+```
 
-Los tres utilizan:
+Los tres comparten documentos, índice, tools, MCP, autorización, guardrails, trazas y evaluación.
 
-mismos documentos
-mismo índice
-mismas tools
-mismo MCP
-mismas reglas de autorización
-mismos guardrails
-mismas trazas
+**Native.** La implementación manual: llama al modelo, interpreta el JSON del planner, ejecuta tools, vuelve a llamar al modelo, maneja el fallback y controla el loop. Sirve para ver qué hay debajo de los frameworks.
 
-Lo que cambia principalmente es la forma de orquestar el LLM y el agente.
+```
+Planner → ¿tools?
+            ├── NO → RAG
+            └── SÍ → Agent
+```
 
-11. Native
+**LangChain.** Lo mismo con las abstracciones del framework: LCEL (`prompt | model`), `ChatGoogleGenerativeAI`, `ChatGroq`, `BaseRetriever`, `StructuredTool`, `bind_tools`, `with_structured_output`, `with_fallbacks`.
 
-Es tu implementación manual.
+```
+model → tool_calls → ToolMessage → model
+```
 
-Planner
-   ↓
-if tools?
-   │
-   ├── NO → RAG
-   │
-   └── YES → Agent
+El repo demuestra: “I understand both the underlying implementation and the framework abstraction.”
 
-Tú escribiste el código que:
+**LangGraph.** Cambia la forma de representar el flujo. En lugar de `for step in range(MAX_STEPS)`, hay un grafo:
 
-llama al modelo
-interpreta JSON
-ejecuta tools
-vuelve a llamar al modelo
-maneja fallback
-controla el loop
-
-Esto es excelente para aprender porque puedes ver qué hay debajo de los frameworks.
-
-12. LangChain
-
-Ahora dices:
-
-"Quiero hacer lo mismo usando las abstracciones de LangChain."
-
-Por ejemplo:
-
-ChatPromptTemplate
-       ↓
-Retriever
-       ↓
-Model
-
-Eso es LCEL:
-
-prompt | model
-
-Y para tools:
-
-model
-  ↓
-tool_calls
-  ↓
-ToolMessage
-  ↓
-model
-
-LangChain te proporciona abstracciones como:
-
-ChatGoogleGenerativeAI
-ChatGroq
-BaseRetriever
-StructuredTool
-bind_tools
-with_structured_output
-with_fallbacks
-
-Por eso tu repo puede demostrar:
-
-"I understand both the underlying implementation and the framework abstraction."
-
-Eso es valioso.
-
-13. LangGraph
-
-LangGraph cambia principalmente la forma de representar el workflow.
-
-En lugar de:
-
-for step in range(MAX_STEPS):
-    ...
-
-tienes:
-
+```
               State
                 │
-                ▼
               route
-             /     \
-            /       \
-         retrieve   agent
-            │         │
-            ▼         ▼
-         generate    tools
-            │         │
-            │         └──→ agent
-            ▼
-           END
+             /  │  \
+      retrieve  │   agent ⇄ tools
+         │   missing_user   │
+      generate  │         finish
+         │      │           │
+         └──────┴─── END ───┘
+```
 
-Aquí aparecen tres conceptos fundamentales:
+- **State:** lo que viaja por el flujo (question, user_id, documents, messages, answer, tokens).
+- **Node:** una función que hace algo (route, retrieve, generate, agent, tools, finish).
+- **Edge:** qué nodo viene después (agent → tools, tools → agent, agent → finish).
 
-State
+LangGraph es útil cuando el flujo tiene ciclos, estado y decisiones.
 
-Información que viaja por el workflow:
+### Qué cubre el repo
 
-question
-user_id
-documents
-messages
-response
-tokens
-Node
-
-Una función que hace algo:
-
-route
-retrieve
-generate
-agent
-tools
-finish
-Edge
-
-Define qué nodo viene después.
-
-agent → tools
-tools → agent
-agent → finish
-
-Por eso LangGraph es especialmente útil cuando el flujo tiene ciclos, estado y decisiones.
-
-14. Entonces, ¿qué aprendiste con este repo?
-
-En realidad estás construyendo una pequeña plataforma de GenAI.
-
+```
                  ENTERPRISE GENAI APP
                          │
         ┌────────────────┼─────────────────┐
@@ -614,121 +408,54 @@ En realidad estás construyendo una pequeña plataforma de GenAI.
       Data              AI              Operations
         │                │                 │
    Databricks          RAG              LLMOps
-   Delta              Agents           Tracing
-   Bronze/Silver       Tools            Evaluation
-   Gold               MCP              Cost
-        │                │              Guardrails
-        └────────────────┼────────────────┘
+   Delta               Agents           Tracing + feedback
+   Bronze/Silver       Tools            Evaluation + gate
+   Gold                MCP              Cost, guardrails
+        │                │                 │
+        └────────────────┼─────────────────┘
                          │
                   FastAPI / React
+```
 
-Y esto encaja bastante bien con la vacante.
+### LLMOps
 
-15. ¿Dónde entra LLMOps?
+Cada respuesta deja una traza persistente con request_id, usuario, pregunta, modelo, prompt_version, modo, latencia, tokens, coste, documentos, tools y feedback. Con eso se responde:
 
-Tu aplicación genera una traza:
+- ¿Cuánto tarda y cuánto cuesta?
+- ¿Qué modelo respondió? ¿Cuánto cae a los fallbacks?
+- ¿Qué documentos y tools usó?
+- ¿Qué orquestador estaba activo y cuál rinde mejor?
+- ¿Al usuario le sirvió (👍 / 👎)?
+- ¿Un cambio de prompt, chunk u orquestador empeoró la calidad? (evaluación de 7 casos con historial y filtro de CI)
 
-request_id
-user
-model
-prompt_version
-mode
-latency
-tokens
-cost
-documents
-tools
+Endpoints: `/traces`, `/metrics`, `/feedback`, `/evaluations`. Panel: `/ops`.
 
-Eso permite contestar:
+### El recorrido para la entrevista
 
-¿Cuánto tarda?
+No hace falta memorizar los archivos, sino este recorrido:
 
-¿Cuánto cuesta?
+```
+USER → React → FastAPI → Guardrail → ORCHESTRATOR
+                                        ├── RAG   → Databricks Gold → Retriever → LLM
+                                        └── AGENT → MCP Tools → datos o acción de RR. HH.
+                                     → Guardrail → Trace / LLMOps
+```
 
-¿Qué modelo respondió?
+| Pieza | Papel |
+| --- | --- |
+| Databricks | Datos |
+| RAG | Buscar conocimiento |
+| LLM | Generar lenguaje |
+| Agent | Decidir y usar herramientas |
+| Tools | Acceder a sistemas o ejecutar acciones |
+| MCP | Protocolo para exponer y descubrir tools |
+| LangChain | Framework para construir componentes y apps LLM |
+| LangGraph | Framework para orquestar flujos y agentes con estado |
+| LLMOps | Operar, evaluar, monitorear y gobernar la app LLM |
+| FastAPI / React | API e interfaz |
 
-¿Qué documentos utilizó?
+La frase para decir de memoria:
 
-¿Qué tools llamó?
+> “This project is an enterprise GenAI assistant that combines RAG for company knowledge with an agent for employee-specific data and actions. Databricks provides the curated data layer, MCP exposes the HR tools, and I implemented the orchestration three ways: a native implementation, LangChain, and LangGraph. This allows me to compare the abstractions while keeping the same data, tools, authorization, and evaluation pipeline.”
 
-¿Qué versión del prompt estaba activa?
-
-Y tienes:
-
-/evaluations
-/traces
-/metrics
-
-Eso es la base de LLMOps.
-
-16. Lo que yo quiero que tengas en la cabeza para la entrevista
-
-No memorices todos los archivos.
-
-Memoriza este recorrido:
-
-USER
- │
- ▼
-React
- │
- ▼
-FastAPI
- │
- ▼
-Guardrail
- │
- ▼
-ORCHESTRATOR
- │
- ├───────────────┐
- ▼               ▼
-RAG             AGENT
- │               │
- ▼               ▼
-Databricks      MCP
-Gold            Tools
- │               │
- ▼               ▼
-Retriever       HR data/action
- │
- ▼
-LLM
- │
- ▼
-Guardrail
- │
- ▼
-Trace / LLMOps
-
-Y luego recuerda:
-
-Databricks = datos
-
-RAG = buscar conocimiento
-
-LLM = generar lenguaje
-
-Agent = decidir/usar herramientas
-
-Tools = acceder a sistemas o ejecutar acciones
-
-MCP = protocolo para exponer/descubrir tools
-
-LangChain = framework para construir componentes/apps LLM
-
-LangGraph = framework para orquestar workflows/agentes con estado
-
-LLMOps = operar, evaluar, monitorizar y gobernar la aplicación LLM
-
-FastAPI = API
-
-React = interfaz
-
-Y una frase que deberías poder decir de memoria
-
-"This project is an enterprise GenAI assistant that combines RAG for company knowledge with an agent for employee-specific data and actions. Databricks provides the curated data layer, MCP exposes the HR tools, and I implemented the orchestration three ways: a native implementation, LangChain, and LangGraph. This allows me to compare the abstractions while keeping the same data, tools, authorization, and evaluation pipeline."
-
-Si puedes explicar ese recorrido sin mirar el README, ya estás entendiendo realmente el proyecto y no simplemente siguiendo el código.
-
-Files, images, and data analysis are unavailable until usage resets at 7:58 PM. Continue chatting with text only, or
+Si puedes explicar ese recorrido sin mirar el README, entiendes el proyecto y no solo sigues el código.

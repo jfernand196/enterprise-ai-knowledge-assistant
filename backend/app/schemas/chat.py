@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.domain.models import EXTRACTIVE_MODEL_ID
+
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
@@ -33,7 +35,7 @@ class ChatResponse(BaseModel):
     citations: list[Citation]
     tool_calls: list[ToolCallResult]
     mode: str
-    model: str = "grounded-extractive-v1"
+    model: str = EXTRACTIVE_MODEL_ID
     prompt_version: str = "v1"
     latency_ms: int = 0
     input_tokens: int = 0

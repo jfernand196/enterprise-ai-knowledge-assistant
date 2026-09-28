@@ -1,4 +1,13 @@
 from dataclasses import dataclass
+from enum import StrEnum
+
+EXTRACTIVE_MODEL_ID = "grounded-extractive-v1"
+
+
+class Mode(StrEnum):
+    RAG = "rag"
+    AGENT = "agent"
+    BLOCKED = "blocked"
 
 
 @dataclass(frozen=True)

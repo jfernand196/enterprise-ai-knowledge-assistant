@@ -4,9 +4,10 @@ from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 
-from app.agent.answers import citations_from, compose_answer, sources_from
+from app.agent.answers import MISSING_USER, agent_response, compose_answer
 from app.agent.tools import ToolRegistry
 from app.core.text import truncate_excerpt
+from app.domain.models import Mode
 from app.lc.agent import keep_errors, run_tool_agent
 from app.lc.models import build_chat_models, model_name, token_usage, with_fallbacks
 from app.lc.rag_chain import build_rag_chain
@@ -14,9 +15,7 @@ from app.lc.retriever import IndexRetriever
 from app.lc.router import StructuredRouter
 from app.lc.tools import ScopedTools
 from app.rag.retriever import Retriever
-from app.schemas.chat import ChatRequest, ChatResponse, Citation, ToolCallResult
-
-MISSING_USER = "I can look that up, but I need a user_id to call the HR tools."
+from app.schemas.chat import ChatRequest, ChatResponse, Citation
 
 
 class RouterPort(Protocol):
@@ -36,14 +35,7 @@ class LangChainRagService:
         state = await chain.ainvoke(payload.message)
         documents: list[Document] = state["documents"]
         message = state["message"]
-        response = ChatResponse.create(
-            request_id=request_id,
-            message=payload.message,
-            answer=message.text.strip(),
-            sources=list(dict.fromkeys(document.metadata["title"] for document in documents)),
-            citations=[to_citation(document) for document in documents],
-            mode="rag",
-        )
+        response = rag_response(request_id, payload.message, message.text.strip(), documents)
         if documents:
             response.model = model_name(message)
             response.input_tokens, response.output_tokens = token_usage(message)
@@ -68,23 +60,13 @@ class LangChainAgentService:
 
     async def answer(self, payload: ChatRequest, request_id: str) -> ChatResponse:
         if payload.user_id is None:
-            return ChatResponse.create(request_id=request_id, message=payload.message, answer=MISSING_USER, mode="agent")
+            return agent_response(request_id, payload.message, MISSING_USER, [])
         scoped = ScopedTools(self._registry, payload.user_id, self._writers, payload.message)
         tools = scoped.build()
         run = await run_tool_agent(with_fallbacks(self._models, tools), tools, payload.message)
         observations = scoped.observations
-        response = ChatResponse.create(
-            request_id=request_id,
-            message=payload.message,
-            answer=keep_errors(run.answer or compose_answer(observations), observations),
-            sources=sources_from(observations),
-            citations=citations_from(observations),
-            tool_calls=[
-                ToolCallResult(name=item.name, arguments=item.arguments, result=item.result)
-                for item in observations
-            ],
-            mode="agent",
-        )
+        answer = keep_errors(run.answer or compose_answer(observations), observations)
+        response = agent_response(request_id, payload.message, answer, observations)
         response.model = run.model
         response.input_tokens, response.output_tokens = run.input_tokens, run.output_tokens
         return response
@@ -105,6 +87,17 @@ def build_langchain_services(
     return (
         LangChainRagService(retriever, with_fallbacks(models)),
         LangChainAgentService(registry, models, StructuredRouter(models), writers),
+    )
+
+
+def rag_response(request_id: str, message: str, answer: str, documents: list[Document]) -> ChatResponse:
+    return ChatResponse.create(
+        request_id=request_id,
+        message=message,
+        answer=answer,
+        sources=list(dict.fromkeys(document.metadata["title"] for document in documents)),
+        citations=[to_citation(document) for document in documents],
+        mode=Mode.RAG,
     )
 
 

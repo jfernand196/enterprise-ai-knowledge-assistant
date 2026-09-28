@@ -1,4 +1,3 @@
-import re
 
 INJECTION_PATTERNS = (
     "ignore previous instructions",

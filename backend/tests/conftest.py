@@ -5,6 +5,8 @@ from pathlib import Path
 os.environ["LAKEHOUSE_BACKEND"] = "local"
 os.environ["LLM_PROVIDER"] = "extractive"
 os.environ["ORCHESTRATOR"] = "native"
+os.environ["TRACES_PATH"] = ""
+os.environ["EVALUATIONS_PATH"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

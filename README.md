@@ -26,6 +26,17 @@ The design choices and the reason for each tool are in [docs/arquitectura.md](do
 
 Restart uvicorn after changing it. Traces record the choice as `prompt_version` (`v1`, `langchain-v1`, `langgraph-v1`).
 
+## LLMOps
+
+- **Traces:** every `/chat` writes latency, tokens, cost, model, route, documents, and tools to `data/llmops/traces.jsonl` (gitignored). They survive a restart.
+- **Feedback:** 👍 / 👎 under each answer, stored on the trace.
+- **Metrics:** `/metrics` totals plus breakdowns by orchestrator and by model, so the three orchestrators can be compared.
+- **Evaluation:** seven golden cases covering policy RAG, the agent, authorization, and a prompt injection. Every run is kept, so a regression shows up.
+- **Quality gate:** `python -m app.llmops.gate --min-pass-rate 0.85` exits 1 when the pass rate drops.
+- **Panel:** `/ops` in the UI shows all of the above.
+
+Details and trade-offs are in [docs/arquitectura.md](docs/arquitectura.md#llmops).
+
 ## Layout
 
 | Path | Contents |
@@ -36,12 +47,12 @@ Restart uvicorn after changing it. Traces record the choice as `prompt_version` 
 | `backend/app/agent` | Planner, tools, answer writer |
 | `backend/app/mcp` | In-process MCP server and client for the HR tools |
 | `backend/app/lakehouse` | Bronze, silver, gold pipeline (local JSON or Databricks Delta) |
-| `backend/app/llmops` | Guardrails, traces, token and cost estimates |
+| `backend/app/llmops` | Guardrails, persistent traces, token and cost estimates, quality gate |
 | `backend/app/lc` | The same RAG and agent built with LangChain |
 | `backend/app/lg` | The whole flow as a LangGraph state graph |
 | `backend/tests` | Pytest suite that runs without Databricks or an API key |
 | `frontend` | Vite + React chat UI |
-| `data` | Policy documents, employees, evaluation questions |
+| `data` | Policy documents, employees, evaluation cases; `data/llmops` holds local traces (gitignored) |
 | `docs` | Architecture notes and LangChain / LangGraph study guides |
 
 `.env` and `data/` stay at the repository root. The backend reads both from there.
@@ -74,23 +85,25 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The **Guía** button lists what to ask and the expected answer. Each reply shows input tokens, output tokens, and latency. The header button switches the UI between Spanish and English.
+Open http://localhost:5173. The **Guía** button lists what to ask and the expected answer. Each reply shows input tokens, output tokens, latency, and feedback buttons. **Ops** opens the LLMOps panel at http://localhost:5173/ops. The header button switches the UI between Spanish and English.
 
 ## API
 
 - `GET /health`
 - `POST /chat`
-- `POST /evaluations`
+- `POST /evaluations` runs the golden set; `GET /evaluations` lists past runs
+- `POST /feedback`
 - `GET /mcp/tools`
 - `POST /lakehouse/runs`
 - `GET /metrics`
-- `GET /traces`
+- `GET /traces?limit=50`
 - `GET /traces/{request_id}`
 
 ## Test
 
 ```bash
 cd backend && .venv/bin/pytest
+cd backend && .venv/bin/python -m app.llmops.gate --min-pass-rate 0.85
 cd frontend && npx tsc -b
 ```
 

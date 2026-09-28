@@ -3,7 +3,7 @@ from typing import Any
 
 import httpx
 
-from app.domain.models import ScoredChunk
+from app.domain.models import EXTRACTIVE_MODEL_ID, ScoredChunk
 from app.rag.generator import NO_CONTEXT_ANSWER, GroundedGenerator
 
 GEMINI_URLS = (
@@ -55,7 +55,7 @@ class GeminiGroundedGenerator:
 
     def generate(self, question: str, chunks: list[ScoredChunk]) -> str:
         if not chunks:
-            self.model_id = "grounded-extractive-v1"
+            self.model_id = EXTRACTIVE_MODEL_ID
             self.last_usage = None
             return NO_CONTEXT_ANSWER
         text = self.complete(SYSTEM_PROMPT, _user_prompt(question, chunks))
