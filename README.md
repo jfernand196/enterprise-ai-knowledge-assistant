@@ -14,6 +14,16 @@ Policy questions go to RAG. Questions about the speaker (vacation balance, time 
 
 The design choices and the reason for each tool are in [docs/arquitectura.md](docs/arquitectura.md).
 
+## Screenshots
+
+| RAG answer with sources | HR agent with MCP tools |
+|---|---|
+| ![RAG answer with sources](docs/screenshots/02-rag-policy.png) | ![HR agent creating a time off request](docs/screenshots/03-hr-agent.png) |
+
+| Guide | LLMOps panel |
+|---|---|
+| ![Guide with sample questions](docs/screenshots/01-home.png) | ![LLMOps metrics and traces](docs/screenshots/04-llmops.png) |
+
 ## Orchestrators
 
 `ORCHESTRATOR` in `.env` picks who runs the flow. All three share the index, the MCP tools, authorization, and tracing.
